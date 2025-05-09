@@ -1,0 +1,13 @@
+*.out
+*.log
+.DS_Store
+.idea
+.vscode
+*~
+
+bin
+
+# High Dynamic Range (HDR) Histogram files
+*.hdr
+
+./pkg/targets/kwdb/c-deps/build
