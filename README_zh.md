@@ -13,7 +13,7 @@ kwdb-tsbs 是一个基于 Timescale/tsbs 改造的开源高性能时序数据库
 1. 克隆仓库
 ```bash
 git clone https://gitee.com/kwdb/kwdb-tsbs.git
-cd $GOPATH/src/gitee.com/kwdb/kwdb-tsbs
+cd kwdb-tsbs
 ```
 
 2. 构建应用
@@ -49,6 +49,8 @@ kwdb-tsbs/scripts/tsbs_kwdb.sh
 ```bash
 workspace="$GOPATH/src/gitee.com/kwdb"  scripts/tsbs_kwdb.sh
 ```
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;参数说明<br>
+&nbsp;&nbsp;&nbsp;&nbsp;workspace：KWDB 工作目录的路径。有关更多自动化测试脚本的参数配置，参见脚本文件中的详细注释说明。
 * 运行完成后产生相关文件如下
 ```bash
 kwdb-tsbs/

@@ -14,7 +14,7 @@ providing complete support for data generation, loading, and query testing speci
 1. Clone repository
 ```bash
 git clone https://gitee.com/kwdb/kwdb-tsbs.git
-GOPATH/src/gitee.com/kwdb/kwdb-tsbs
+cd kwdb-tsbs
 ```
 
 2. Build application
@@ -50,6 +50,8 @@ kwdb-tsbs/scripts/tsbs_kwdb.sh
  ```bash
 workspace="$GOPATH/src/gitee.com/kwdb" scripts/tsbs_kwdb.sh
 ```
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;parameter description<br>
+&nbsp;&nbsp;&nbsp;&nbsp;workspace：The path to the KWDB working directory. For more parameter configurations of automated testing scripts, please refer to the detailed annotation instructions in the script file.
 * After the operation is completed, the relevant files are generated as follows
 ```bash
 kwdb-tsbs/
