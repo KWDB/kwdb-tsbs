@@ -2,10 +2,9 @@ package kwdb
 
 import (
 	"bytes"
-	"sync"
-
 	"github.com/timescale/tsbs/pkg/data"
 	"github.com/timescale/tsbs/pkg/targets"
+	"sync"
 )
 
 type Node2chan struct {
@@ -23,21 +22,44 @@ type indexer struct {
 	numChan       int
 	node2Chan     Node2chan
 	Nodes         int
+	ChansLen      int
 }
+
+var casetype string
 
 func (i *indexer) GetIndex(item data.LoadedPoint) uint {
 	p := item.Data.(*point)
-
 	if p.sqlType != Insert {
 		return 0
 	}
-	targetChans := &i.node2Chan
-	index := uint(targetChans.chans[targetChans.idx])
-	targetChans.idx++
-	if targetChans.idx == len(targetChans.chans) {
-		targetChans.idx = 0
+
+	if p.fieldCount == 11 {
+		targetChans := &i.node2Chan
+		index := uint(targetChans.chans[targetChans.idx])
+		targetChans.idx++
+		if targetChans.idx == len(targetChans.chans) {
+			targetChans.idx = 0
+		}
+		return index
+	} else {
+		lastUnderscore := len(p.device) - 1
+		for lastUnderscore >= 0 && p.device[lastUnderscore] != '_' {
+			lastUnderscore--
+		}
+
+		var num int64
+		for i := lastUnderscore + 1; i < len(p.device); i++ {
+			num = num*10 + int64(p.device[i]-'0')
+		}
+
+		modVal := i.ChansLen / 2
+		index := int(num) % modVal
+		if p.fieldCount != 8 {
+			index += 6
+		}
+
+		return uint(index)
 	}
-	return index
 }
 
 // point is a single row of data keyed by which superTable it belongs

@@ -3,12 +3,11 @@ package kwdb
 import (
 	"context"
 	"fmt"
+	"github.com/timescale/tsbs/pkg/targets"
+	"github.com/timescale/tsbs/pkg/targets/kwdb/commonpool"
 	"math"
 	"strconv"
 	"strings"
-
-	"github.com/timescale/tsbs/pkg/targets"
-	"github.com/timescale/tsbs/pkg/targets/kwdb/commonpool"
 )
 
 func (fa *fixedArgList) EmplaceFloat64(value float64) {
@@ -36,9 +35,9 @@ type prepareProcessoriot struct {
 	// prepare buff
 	buffer               map[string]*fixedArgList // tableName, fixedArgList
 	buffInited           bool
-	formatBuf            []int16
 	formatBufReadings    []int16
 	formatBufDiagnostics []int16
+	tables               map[string]string
 }
 
 func newProcessorPrepareiot(opts *LoadingOptions, dbName string) *prepareProcessoriot {
@@ -48,9 +47,14 @@ func newProcessorPrepareiot(opts *LoadingOptions, dbName string) *prepareProcess
 		sci:                  globalSCI,
 		preparedSql:          make(map[string]struct{}),
 		buffer:               make(map[string]*fixedArgList),
-		formatBuf:            make([]int16, opts.Preparesize*11),
-		formatBufReadings:    make([]int16, opts.Preparesize*8),
-		formatBufDiagnostics: make([]int16, opts.Preparesize*4),
+		formatBufReadings:    make([]int16, opts.Preparesize*9),
+		formatBufDiagnostics: make([]int16, opts.Preparesize*5),
+		tables: map[string]string{
+			"readings": fmt.Sprintf("insert into %s.readings (name, fleet, driver, model, "+
+				"device_version, load_capacity, fuel_capacity, nominal_fuel_consumption) values", opts.DBName),
+			"diagnostics": fmt.Sprintf("insert into %s.diagnostics (name, fleet, driver, model, "+
+				"device_version, load_capacity, fuel_capacity, nominal_fuel_consumption) values", opts.DBName),
+		},
 	}
 }
 
@@ -58,36 +62,20 @@ func (p *prepareProcessoriot) Init(workerNum int, doLoad, _ bool) {
 	if !doLoad {
 		return
 	}
-
-	p.prepareStmt.Grow(Size1M)
-	for i := 0; i < p.opts.Preparesize; i++ {
-		// p.prepareStmt.WriteString(fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)", i*11+1, i*11+2, i*11+3, i*11+4, i*11+5, i*11+6, i*11+7, i*11+8, i*11+9, i*11+10, i*11+11))
-		p.prepareStmt.WriteString(fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)", i*16+1, i*16+2, i*16+3, i*16+4, i*16+5, i*16+6, i*16+7, i*16+8, i*16+9, i*16+10, i*16+11, i*16+12, i*16+13, i*16+14, i*16+15, i*16+16))
-		if i == p.opts.Preparesize-1 {
-			p.prepareStmt.WriteString(";")
-		} else {
-			p.prepareStmt.WriteString(",")
-		}
-	}
 	p.prepareStmtReadings.Grow(Size1M)
 	for i := 0; i < p.opts.Preparesize; i++ {
-		// p.prepareStmt.WriteString(fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)", i*11+1, i*11+2, i*11+3, i*11+4, i*11+5, i*11+6, i*11+7, i*11+8, i*11+9, i*11+10, i*11+11))
-		p.prepareStmtReadings.WriteString(fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)", i*8+1, i*8+2, i*8+3, i*8+4, i*8+5, i*8+6, i*8+7, i*8+8))
-		if i == p.opts.Preparesize-1 {
-			p.prepareStmtReadings.WriteString(";")
-		} else {
-			p.prepareStmtReadings.WriteString(",")
-		}
+		p.prepareStmtReadings.WriteString(fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+			i*9+1, i*9+2, i*9+3, i*9+4, i*9+5, i*9+6, i*9+7, i*9+8, i*9+9))
+		p.prepareStmtReadings.WriteString(",")
 	}
+	p.prepareStmtReadings.WriteString(";")
 	p.prepareStmtDiagnostics.Grow(Size1M)
 	for i := 0; i < p.opts.Preparesize; i++ {
-		p.prepareStmtDiagnostics.WriteString(fmt.Sprintf("($%d,$%d,$%d,$%d)", i*4+1, i*4+2, i*4+3, i*4+4))
-		if i == p.opts.Preparesize-1 {
-			p.prepareStmtDiagnostics.WriteString(";")
-		} else {
-			p.prepareStmtDiagnostics.WriteString(",")
-		}
+		p.prepareStmtDiagnostics.WriteString(fmt.Sprintf("($%d,$%d,$%d,$%d,$%d)",
+			i*5+1, i*5+2, i*5+3, i*5+4, i*5+5))
+		p.prepareStmtDiagnostics.WriteString(",")
 	}
+	p.prepareStmtDiagnostics.WriteString(";")
 	p.workerIndex = workerNum
 
 	var err error
@@ -96,15 +84,11 @@ func (p *prepareProcessoriot) Init(workerNum int, doLoad, _ bool) {
 		panic(err)
 	}
 
-	for i := 0; i < p.opts.Preparesize*11; i++ {
-		p.formatBuf[i] = 1
-	}
-
-	for i := 0; i < p.opts.Preparesize*8; i++ {
+	for i := 0; i < p.opts.Preparesize*9; i++ {
 		p.formatBufReadings[i] = 1
 	}
 
-	for i := 0; i < p.opts.Preparesize*4; i++ {
+	for i := 0; i < p.opts.Preparesize*5; i++ {
 		p.formatBufDiagnostics[i] = 1
 	}
 }
@@ -129,61 +113,96 @@ func (p *prepareProcessoriot) ProcessBatch(b targets.Batch, doLoad bool) (metric
 		p.createDeviceAndAttribute(batches.createSql)
 	}
 
-	// init buffer for every table
-	if !p.buffInited {
-		for tableName := range batches.m {
-			_, ok := p.buffer[tableName]
-			if !ok {
-				buffer := newFixedArgList(p.opts.Preparesize * getPreparesize(tableName))
-				buffer.Init()
-				p.buffer[tableName] = buffer
-			}
-		}
-		p.buffInited = true
-	}
-
-	// join args and execute
 	for tableName, args := range batches.m {
+		isReadings := tableName[:8] == "readings"
+		tableType := "readings"
+		if !isReadings {
+			tableType = "diagnostics"
+		}
+
+		_, ok := p.buffer[tableType]
+		if !ok {
+			buffer := newFixedArgList(p.opts.Preparesize * getPreparesize(tableName))
+			buffer.Init()
+			p.buffer[tableType] = buffer
+		}
+
 		rowCnt += uint64(len(args))
-		tableBuffer := p.buffer[tableName]
+		tableBuffer := p.buffer[tableType]
 
 		for _, s := range args {
 			s = s[1 : len(s)-1]
-			values := strings.Split(s, ",")
+			start := 0
+			i := 0 // 字段索引
 
-			// Emplace
-			for i, v := range values {
-				if i == 0 {
-					// timestamp: UTC+8 Time Zone
-					num, _ := strconv.ParseInt(v, 10, 64)
-					tableBuffer.Emplace(uint64(num*1000) - microsecFromUnixEpochToY2K + 8*3600*1000000)
-				} else {
-					// row data
-					if num, err := strconv.ParseInt(v, 10, 64); err == nil {
-						tableBuffer.Emplace(uint64(num))
-						continue
+			if tableType == "readings" {
+				for pos, char := range s {
+					if char == ',' || pos == len(s)-1 {
+						end := pos
+						if pos == len(s)-1 {
+							end = len(s)
+						}
+						v := s[start:end]
+
+						if i == 0 { // 时间戳
+							num, _ := strconv.ParseInt(v, 10, 64)
+							tableBuffer.Emplace(uint64(num*1000) - microsecFromUnixEpochToY2K + 8*3600*1000000)
+						} else if i == 8 {
+							v = strings.TrimSpace(v)
+							vv := strings.Split(v, "'")
+							tableBuffer.Append([]byte(vv[1]))
+						} else {
+							num, _ := strconv.ParseFloat(v, 64)
+							tableBuffer.EmplaceFloat64(num)
+						}
+
+						start = pos + 1
+						i++
 					}
-					if num, err := strconv.ParseFloat(v, 64); err == nil {
-						tableBuffer.EmplaceFloat64(num)
-						continue
+				}
+			} else {
+				for pos, char := range s {
+					if char == ',' || pos == len(s)-1 {
+						end := pos
+						if pos == len(s)-1 {
+							end = len(s)
+						}
+						v := s[start:end]
+
+						// 处理每个字段
+						if i == 0 {
+							num, _ := strconv.ParseInt(v, 10, 64)
+							tableBuffer.Emplace(uint64(num*1000) - microsecFromUnixEpochToY2K + 8*3600*1000000)
+						} else if i == 4 {
+							v = strings.TrimSpace(v)
+							vv := strings.Split(v, "'")
+							tableBuffer.Append([]byte(vv[1]))
+						} else if i == 3 {
+							if num, err := strconv.ParseInt(v, 10, 64); err == nil {
+								tableBuffer.Emplace(uint64(num))
+							}
+						} else {
+							if num, err := strconv.ParseFloat(v, 64); err == nil {
+								tableBuffer.EmplaceFloat64(num)
+							}
+						}
+
+						start = pos + 1
+						i++
 					}
-					tableBuffer.EmplaceString(v)
 				}
 			}
-
 			// check buffer is full
 			if tableBuffer.Length() == tableBuffer.Capacity() {
-				// init prepareStmt
-				_, ok := p.preparedSql[tableName]
+				_, ok := p.preparedSql[tableType]
 				if !ok {
-					p.createPrepareSql(tableName)
-					p.preparedSql[tableName] = struct{}{}
+					p.createPrepareSql(tableType)
+					p.preparedSql[tableType] = struct{}{}
 				}
-
-				p.execPrepareStmt(tableName, tableBuffer.args)
-				// reuse buffer: reset tableBuffer's write position
+				p.execPrepareStmt(tableType, tableBuffer.args)
 				tableBuffer.Reset()
 			}
+
 		}
 	}
 
@@ -194,9 +213,9 @@ func (p *prepareProcessoriot) ProcessBatch(b targets.Batch, doLoad bool) (metric
 // 根据 tableName 获取相应的 preparesize 值
 func getPreparesize(tableName string) int {
 	if strings.HasPrefix(tableName, "readings") {
-		return 8
+		return 9
 	} else if strings.HasPrefix(tableName, "diagnostics") {
-		return 4
+		return 5
 	}
 	return -1
 }
@@ -218,81 +237,49 @@ func (p *prepareProcessoriot) createDeviceAndAttribute(createSql []*point) {
 			}
 			actual, _ := p.sci.m.LoadOrStore(row.template, ctx)
 			sql := fmt.Sprintf("create table %s.%s %s", p.opts.DBName, row.template, row.sql)
-			//fmt.Println(sql)
 			_, err := p._db.Connection.Exec(ctx.c, sql)
-			if err != nil {
-				panic(fmt.Sprintf("kwdb create device failed,err :%s", err))
-			}
-
 			if err != nil && !strings.Contains(err.Error(), "already exists") {
-				panic(fmt.Sprintf("kwdb create device failed,err :%s", err))
+				panic(fmt.Sprintf("kwdb create device failed, err: %s", err))
 			}
 			actual.(*Ctx).cancel()
+
 		case CreateTable:
-			c, cancel := context.WithCancel(context.Background())
-			ctx := &Ctx{
-				c:      c,
-				cancel: cancel,
+			if sql, ok := p.tables[row.template]; ok {
+				p.tables[row.template] = sql + row.sql + ","
 			}
-			actual, _ := p.sci.m.LoadOrStore(row.device, ctx)
+			continue
 
-			v, ok := p.sci.m.Load(row.template)
-			if ok {
-				<-v.(*Ctx).c.Done() //等待v.(*Ctx).c的上下文完成。
-				sql := fmt.Sprintf("create table %s.%s using %s %s", p.opts.DBName, row.device, row.template, row.sql)
-				//fmt.Println(sql)
-				_, err := p._db.Connection.Exec(ctx.c, sql)
-				if err != nil {
-					panic(fmt.Sprintf(" 249:kwdb create device failed,err :%s, sql :%s, ", err, sql))
-				}
-				if err != nil && !strings.Contains(err.Error(), "already exists") {
-					fmt.Println(sql)
-					panic(err)
-				}
-
-				actual.(*Ctx).cancel()
-				continue
-			}
-			// wait for template table created
-			templateTableC, templateTableCancel := context.WithCancel(context.Background())
-			templateTableCtx := &Ctx{
-				c:      templateTableC,
-				cancel: templateTableCancel,
-			}
-			templateTableActual, _ := p.sci.m.LoadOrStore(row.template, templateTableCtx)
-			<-templateTableActual.(*Ctx).c.Done()
-
-			sql := fmt.Sprintf("create table %s.%s using %s %s", p.opts.DBName, row.device, row.template, row.sql)
-			//fmt.Println(sql)
-			_, err := p._db.Connection.Exec(ctx.c, sql)
-			if err != nil {
-				panic(fmt.Sprintf("284:create table failed because %s", err.Error()))
-			}
-			if err != nil && !strings.Contains(err.Error(), "already exists") {
-				fmt.Println(sql)
-				panic(err)
-			}
-
-			actual.(*Ctx).cancel()
 		default:
 			panic("impossible")
+		}
+	}
+
+	for tableName, sql := range p.tables {
+		if len(sql) > 0 {
+			sql = sql[:len(sql)-1]
+			_, err := p._db.Connection.Exec(context.Background(), sql)
+			if err != nil {
+				panic(fmt.Sprintf("kwdb prepare insert data failed for %s, err: %s", tableName, err))
+			}
 		}
 	}
 }
 
 func (p *prepareProcessoriot) createPrepareSql(deviecName string) {
 	var insertsql strings.Builder
-	query := fmt.Sprintf("insert into %s.%s values ", p.opts.DBName, deviecName)
-	insertsql.WriteString(query)
 	if strings.HasPrefix(deviecName, "readings") {
+		query := fmt.Sprintf("insert into %s.readings (k_timestamp,latitude,longitude,elevation,velocity,heading,grade,fuel_consumption,name) values ", p.opts.DBName)
+		insertsql.WriteString(query)
 		sql := insertsql.String() + p.prepareStmtReadings.String()
-		_, err1 := p._db.Connection.Prepare(context.Background(), "insertall"+deviecName, sql)
+		_, err1 := p._db.Connection.Prepare(context.Background(), "insertallreadings", sql)
 		if err1 != nil {
 			panic(fmt.Sprintf("265:kwdb Prepare failed,err :%s, sql :%s", err1, sql))
 		}
 	} else if strings.HasPrefix(deviecName, "diagnostics") {
+		query := fmt.Sprintf("insert into %s.diagnostics (k_timestamp,fuel_state,current_load,status,name) values ", p.opts.DBName)
+		insertsql.WriteString(query)
 		sql := insertsql.String() + p.prepareStmtDiagnostics.String()
-		_, err1 := p._db.Connection.Prepare(context.Background(), "insertall"+deviecName, sql)
+		_, err1 := p._db.Connection.Prepare(context.Background(), "insertalldiagnostics", sql)
 		if err1 != nil {
 			panic(fmt.Sprintf("265:kwdb Prepare failed,err :%s, sql :%s", err1, sql))
 		}
@@ -302,17 +289,15 @@ func (p *prepareProcessoriot) createPrepareSql(deviecName string) {
 }
 
 func (p *prepareProcessoriot) execPrepareStmt(tableName string, args [][]byte) {
-	if strings.HasPrefix(tableName, "readings") {
-		res := p._db.Connection.PgConn().ExecPrepared(context.Background(), "insertall"+tableName, args, p.formatBufReadings, []int16{}).Read()
-		if res.Err != nil {
-			panic(res.Err)
-		}
-	} else if strings.HasPrefix(tableName, "diagnostics") {
-		res := p._db.Connection.PgConn().ExecPrepared(context.Background(), "insertall"+tableName, args, p.formatBufDiagnostics, []int16{}).Read()
+	if tableName == "readings" {
+		res := p._db.Connection.PgConn().ExecPrepared(context.Background(), "insertallreadings", args, p.formatBufReadings, []int16{}).Read()
 		if res.Err != nil {
 			panic(res.Err)
 		}
 	} else {
-		fmt.Printf("unknown table %s\n", tableName)
+		res := p._db.Connection.PgConn().ExecPrepared(context.Background(), "insertalldiagnostics", args, p.formatBufDiagnostics, []int16{}).Read()
+		if res.Err != nil {
+			panic(res.Err)
+		}
 	}
 }

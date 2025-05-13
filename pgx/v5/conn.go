@@ -301,13 +301,13 @@ func (c *Conn) Prepare(ctx context.Context, name, sql string) (sd *pgconn.Statem
 	if name != "" {
 		var ok bool
 		if sd, ok = c.preparedStatements[name]; ok {
-			panic(fmt.Sprintf("prepare le repeat table %s", name))
 			if sd.SQL == sql {
 				if c.prepareTracer != nil {
 					c.prepareTracer.TracePrepareEnd(ctx, c, TracePrepareEndData{AlreadyPrepared: true})
 				}
 				return sd, nil
 			}
+			panic(fmt.Sprintf("prepare le repeat table %s", name))
 		}
 	}
 

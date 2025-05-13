@@ -63,6 +63,19 @@ func (d *dbCreator) CreateDB(dbName string) error {
 			panic(fmt.Sprintf("kwdb create table failed,err :%s", err))
 		}
 
+	} else if d.opts.Case == "iot" {
+		fmt.Println("create iot tables")
+		readings := fmt.Sprintf("create table %s.readings (k_timestamp timestamp NOT NULL,latitude FLOAT8 NOT NULL,longitude FLOAT8 NOT NULL,elevation FLOAT8 NOT NULL,velocity FLOAT8 NOT NULL,heading FLOAT8 NOT NULL,grade FLOAT8 NOT NULL,fuel_consumption FLOAT8 NOT NULL) tags (name VARCHAR(30) NOT NULL,fleet VARCHAR(30),driver VARCHAR(30),model VARCHAR(30),device_version VARCHAR(30),load_capacity FLOAT8,fuel_capacity FLOAT8,nominal_fuel_consumption FLOAT8) primary tags(name)", dbName)
+		_, err := d.db.Connection.Exec(ctx, readings)
+		if err != nil && !strings.Contains(err.Error(), "already exists") {
+			panic(fmt.Sprintf("kwdb create table readings failed,err :%s", err))
+		}
+
+		diagnostics := fmt.Sprintf("create table %s.diagnostics (k_timestamp timestamp NOT NULL,fuel_state FLOAT8 NOT NULL,current_load FLOAT8 NOT NULL,status INT8 NOT NULL) tags (name VARCHAR(30) NOT NULL,fleet VARCHAR(30),driver VARCHAR(30),model VARCHAR(30),device_version VARCHAR(30),load_capacity FLOAT8,fuel_capacity FLOAT8,nominal_fuel_consumption FLOAT8) primary tags(name)", dbName)
+		_, err = d.db.Connection.Exec(ctx, diagnostics)
+		if err != nil && !strings.Contains(err.Error(), "already exists") {
+			panic(fmt.Sprintf("kwdb create table diagnostics failed,err :%s", err))
+		}
 	} else {
 		panic(fmt.Sprintf("kwdb cannot support this use-case '%s', currently only supports cpu-only in devops", d.opts.Case))
 	}
