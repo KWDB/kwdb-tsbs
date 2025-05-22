@@ -32,6 +32,8 @@ load_workers=${load_workers:-12}    # 并发数据加载次数，默认为 12
 node_num=${node_num:-1}                  # 当前节点号
 cluster_node_num=${cluster_node_num:-1}  # 群集中的节点总数
 ip=${ip:-127.0.0.1}                      # 节点IP地址
+ports="${ports:-26257,26258,26259}"      # 监听端口号
+httpports=${httpports:-8981,8982,8983}
 
 ## WAL和副本配置
 wal=${wal:-0}                    # WAL 等级，默认为 0
@@ -44,8 +46,9 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 printf "%-20s %-20s %-20s %-20s\n" \
   "scale=${scale}" "format=${format}" "query_workers=${query_workers}" "query_times=${query_times}" \
   "enable_perf=${enable_perf}" "insert_type=${insert_type}" "node_num=${node_num}" "cluster_node_num=${cluster_node_num}" \
-  "ip=${ip}" "wal=${wal}" "replica_mode=${replica_mode}" "load_workers=${load_workers}" \
-  "parallel_degree=${parallel_degree}" "enable_buffer_pool=${enable_buffer_pool}" "ts_automatic_collection=${ts_automatic_collection}"
+  "wal=${wal}" "replica_mode=${replica_mode}" "ip=${ip}" "ports=${ports}" \
+  "load_workers=${load_workers}" "parallel_degree=${parallel_degree}" "enable_buffer_pool=${enable_buffer_pool}" "httpports=${httpports}" \
+  "ts_automatic_collection=${ts_automatic_collection}"
 printf "\n"
 
 
@@ -53,34 +56,40 @@ data_dir=${workspace}/tsbs_test
 cd ${workspace}/bin
 export KW_WAL_LEVEL=${wal}
 
+IFS=',' read -ra ports <<< "$ports"
+IFS=',' read -ra httpports <<< "$httpports"
+# 检查端口数量是否足够
+if [ "${#ports[@]}" -lt "$node_num" ]|| [ "${#httpports[@]}" -lt "$node_num" ]; then
+    echo "错误：ports或者httpports数量与node_num数量不匹配"
+    exit 1
+fi
+
 echo "-----------server:${node_num}node mode${replica_mode}-----------"
 
 for ((i=1;i<=${node_num};i++))
 do
-    listenport=$((${i}+29256))
-    httpport=$((${i}+8980))
     store=${data_dir}/kwbase-data${i}
     rm -rf ${data_dir}/kwbase-data${i}
     sleep 10
     echo "#### Node${i} start ####"
     if [[ ${replica_mode} == 3 ]]; then
 	if [ ${enable_buffer_pool} == "true" ]; then
-	    	LD_LIBRARY_PATH=../lib ./kwbase start --insecure --listen-addr=${ip}:$listenport --http-addr=${ip}:$httpport --store=$store --join=${ip}:26257 --log-file-verbosity=ERROR --buffer-pool-size=65314 --background
+        LD_LIBRARY_PATH=../lib ./kwbase start --insecure --listen-addr=${ip}:${ports[i-1]} --http-addr=${ip}:${httpports[i-1]} --store=$store --join=${ip}:${ports[0]} --log-file-verbosity=ERROR --buffer-pool-size=65314 --background
         else
-	    	LD_LIBRARY_PATH=../lib ./kwbase start --insecure --listen-addr=${ip}:$listenport --http-addr=${ip}:$httpport --store=$store --join=${ip}:26257 --log-file-verbosity=ERROR --background
+	    	LD_LIBRARY_PATH=../lib ./kwbase start --insecure --listen-addr=${ip}:${ports[i-1]} --http-addr=${ip}:${httpports[i-1]} --store=$store --join=${ip}:${ports[0]} --log-file-verbosity=ERROR --background
 	fi
     else
         if [[ ${cluster_node_num} == 1 ]]; then
 	    if [ ${enable_buffer_pool} == "true" ]; then
-            	LD_LIBRARY_PATH=../lib ./kwbase start-single-node --insecure --listen-addr=${ip}:$listenport --http-addr=${ip}:$httpport  --store=$store --log-file-verbosity=ERROR --buffer-pool-size=65314 --background 
+              LD_LIBRARY_PATH=../lib ./kwbase start-single-node --insecure --listen-addr=${ip}:${ports[i-1]} --http-addr=${ip}:${httpports[i-1]}  --store=$store --log-file-verbosity=ERROR --buffer-pool-size=65314 --background
             else
-                LD_LIBRARY_PATH=../lib ./kwbase start-single-node --insecure --listen-addr=${ip}:$listenport --http-addr=${ip}:$httpport  --store=$store --log-file-verbosity=ERROR --background
+                LD_LIBRARY_PATH=../lib ./kwbase start-single-node --insecure --listen-addr=${ip}:${ports[i-1]} --http-addr=${ip}:${httpports[i-1]}  --store=$store --log-file-verbosity=ERROR --background
 	    fi
         else
 	    if [ ${enable_buffer_pool} == "true" ]; then
-                LD_LIBRARY_PATH=../lib ./kwbase start-single-replica --insecure --listen-addr=${ip}:$listenport --http-addr=${ip}:$httpport  --store=$store  --join=${ip}:26257 --log-file-verbosity=ERROR --buffer-pool-size=65314 --background
+                LD_LIBRARY_PATH=../lib ./kwbase start-single-replica --insecure --listen-addr=${ip}:${ports[i-1]} --http-addr=${ip}:${httpports[i-1]}  --store=$store  --join=${ip}:${ports[0]} --log-file-verbosity=ERROR --buffer-pool-size=65314 --background
 	    else
-                LD_LIBRARY_PATH=../lib ./kwbase start-single-replica --insecure --listen-addr=${ip}:$listenport --http-addr=${ip}:$httpport  --store=$store  --join=${ip}:26257 --log-file-verbosity=ERROR --background
+                LD_LIBRARY_PATH=../lib ./kwbase start-single-replica --insecure --listen-addr=${ip}:${ports[i-1]} --http-addr=${ip}:${httpports[i-1]} --store=$store  --join=${ip}:${ports[0]} --log-file-verbosity=ERROR --background
 	    fi
         fi
     fi
@@ -90,17 +99,17 @@ done
 echo "sleep 30s to wait all nodes start"
 sleep 30
 if [ ${node_num:-1} -gt 1 ]; then
-  LD_LIBRARY_PATH=../lib ./kwbase init --insecure --host=${ip}:26257
+  LD_LIBRARY_PATH=../lib ./kwbase init --insecure --host=${ip}:${ports[0]}
   sleep 10
 fi
 
 echo "check kwdb cluster node status"
-LD_LIBRARY_PATH=../lib ./kwbase node status --insecure --host=${ip}:26257
+LD_LIBRARY_PATH=../lib ./kwbase node status --insecure --host=${ip}:${ports[0]}
 for ((i=1;i<=${cluster_node_num};i++))
 do
     ((line=1+$i))
-    node_status=$(LD_LIBRARY_PATH=../lib ./kwbase node status --insecure --host=${ip}:26257 | awk 'NR=='$line'{print $11}')
-    node_ip=$(LD_LIBRARY_PATH=../lib ./kwbase node status --insecure --host=${ip}:26257 | awk 'NR=='$line'{split($2, ip_port, ":"); print ip_port[1]}')
+    node_status=$(LD_LIBRARY_PATH=../lib ./kwbase node status --insecure --host=${ip}:${ports[i-1]} | awk 'NR=='$line'{print $11}')
+    node_ip=$(LD_LIBRARY_PATH=../lib ./kwbase node status --insecure --host=${ip}:${ports[i-1]} | awk 'NR=='$line'{split($2, ip_port, ":"); print ip_port[1]}')
     echo "node ${i} available status is ${node_status}"
     if [ $i -eq 1 ]; then
         ip1=${node_ip}
@@ -119,68 +128,27 @@ do
     fi
 done
 
-# 初始化IP和端口
-port_base=26257
 
-# 初始化输出列表
-ip_list=()
-port_list=()
-
-# 设置节点
-for ((i=1; i<=${cluster_node_num}; i++)); do
-    if (( (i - 1) % 3 == 0 )); then
-        ip_list+=("${ip1}")
-    elif (( (i - 1) % 3 == 1 )); then
-        ip_list+=("${ip2}")
-    else
-        ip_list+=("${ip3}")
-    fi
-    port=$((port_base + (i - 1) / 3))
-    port_list+=("$port")
-done
-
-
-ip_str=""
-port_str=""
-for ((i=0; i<${#ip_list[@]}; i++)); do
-    ip_str+="${ip_list[i]}"
-    if [ $i -lt $((${#ip_list[@]}-1)) ]; then
-        ip_str+=","
-    fi
-done
-for ((i=0; i<${#port_list[@]}; i++)); do
-    port_str+="${port_list[i]}"
-    if [ $i -lt $((${#port_list[@]}-1)) ]; then
-        port_str+=","
-    fi
-done
-
-echo "ip_str=${ip_str}"
-echo "port_str=${port_str}"
-
-
-LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:26257 --execute="set max_push_limit_number = 10000000;"
-LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:26257 --execute="set can_push_sorter = true;"
+LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:${ports[0]} --execute="set max_push_limit_number = 10000000;"
+LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:${ports[0]} --execute="set can_push_sorter = true;"
 
 # 设置开始
-LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:26257 --execute="set cluster setting sql.distsql.temp_storage.workmem='4096Mib';"
+LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:${ports[0]} --execute="set cluster setting sql.distsql.temp_storage.workmem='4096Mib';"
 sleep 5
-LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:26257 --execute="set cluster setting sql.all_push_down.enabled=true;"
+LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:${ports[0]} --execute="set cluster setting sql.all_push_down.enabled=true;"
 sleep 5
-LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:26257 --execute="set cluster setting sql.pg_encode_short_circuit.enabled = true;"
+LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:${ports[0]} --execute="set cluster setting sql.pg_encode_short_circuit.enabled = true;"
 sleep 5
-LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:26257 --execute="set cluster setting ts.parallel_degree=${parallel_degree};"
+LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:${ports[0]} --execute="set cluster setting ts.parallel_degree=${parallel_degree};"
 sleep 5
-LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:26257 --execute="set cluster setting sql.stats.ts_automatic_collection.enabled=${ts_automatic_collection};"
-LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:26257 --execute="alter schedule scheduled_table_compress  Recurring  '0 0 1 1 ? 2099';"
-LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:26257 --execute="alter schedule scheduled_table_retention  Recurring  '0 0 1 1 ? 2099';"
-LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:26257 --execute="set cluster setting server.tsinsert_direct.enabled = true;"
-LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:26257 --execute="set cluster setting ts.dedup.rule=keep;"
-LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:26257 --execute="set cluster setting sql.stats.tag_automatic_collection.enabled = false;"
+LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:${ports[0]} --execute="set cluster setting sql.stats.ts_automatic_collection.enabled=${ts_automatic_collection};"
+LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:${ports[0]} --execute="alter schedule scheduled_table_compress  Recurring  '0 0 1 1 ? 2099';"
+LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:${ports[0]} --execute="alter schedule scheduled_table_retention  Recurring  '0 0 1 1 ? 2099';"
+LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:${ports[0]} --execute="set cluster setting server.tsinsert_direct.enabled = true;"
+LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:${ports[0]} --execute="set cluster setting ts.dedup.rule=keep;"
+LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:${ports[0]} --execute="set cluster setting sql.stats.tag_automatic_collection.enabled = false;"
 sleep 5
-LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:26257 --execute="set cluster setting ts.ack_before_application.enabled=true;"
-sleep 5
-LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:26257 --execute="set cluster setting ts.raftlog_combine_wal.enabled=true;"
+LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:${ports[0]} --execute="set cluster setting ts.ack_before_application.enabled=true;"
 # 设置结束
 
 
@@ -226,21 +194,21 @@ elif [ ${scale} -eq 100000 ]; then
     load_ts_end="2016-01-01T03:00:00Z"
     echo "generate 3 hours data"
 elif [ ${scale} -eq 1000000 ]; then
-    LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:26257 --execute="SET CLUSTER SETTING ts.entities_per_subgroup.max_limit=5000;"
-    LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:26257 --execute="SET CLUSTER SETTING ts.blocks_per_segment.max_limit=5000;"
-    LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:26257 --execute="SET CLUSTER SETTING ts.rows_per_block.max_limit=18;"
+    LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:${ports[0]} --execute="SET CLUSTER SETTING ts.entities_per_subgroup.max_limit=5000;"
+    LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:${ports[0]} --execute="SET CLUSTER SETTING ts.blocks_per_segment.max_limit=5000;"
+    LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:${ports[0]} --execute="SET CLUSTER SETTING ts.rows_per_block.max_limit=18;"
     load_ts_end="2016-01-01T00:03:00Z"
     echo "generate 3 minutes data"
 elif [ ${scale} -eq 10000000 ]; then
-    LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:26257 --execute="SET CLUSTER SETTING ts.entities_per_subgroup.max_limit=5000;"
-    LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:26257 --execute="SET CLUSTER SETTING ts.blocks_per_segment.max_limit=5000;"
-    LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:26257 --execute="SET CLUSTER SETTING ts.rows_per_block.max_limit=18;"
+    LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:${ports[0]} --execute="SET CLUSTER SETTING ts.entities_per_subgroup.max_limit=5000;"
+    LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:${ports[0]} --execute="SET CLUSTER SETTING ts.blocks_per_segment.max_limit=5000;"
+    LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:${ports[0]} --execute="SET CLUSTER SETTING ts.rows_per_block.max_limit=18;"
     load_ts_end="2016-01-01T00:03:00Z"
     echo "generate 3 minutes data"
 elif [ ${scale} -eq 20000000 ]; then
-    LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:26257 --execute="SET CLUSTER SETTING ts.entities_per_subgroup.max_limit=5000;"
-    LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:26257 --execute="SET CLUSTER SETTING ts.blocks_per_segment.max_limit=5000;"
-    LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:26257 --execute="SET CLUSTER SETTING ts.rows_per_block.max_limit=100;"
+    LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:${ports[0]} --execute="SET CLUSTER SETTING ts.entities_per_subgroup.max_limit=5000;"
+    LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:${ports[0]} --execute="SET CLUSTER SETTING ts.blocks_per_segment.max_limit=5000;"
+    LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:${ports[0]} --execute="SET CLUSTER SETTING ts.rows_per_block.max_limit=100;"
     load_ts_end="2016-01-01T00:16:40Z"
     echo "generate 3 minutes data"
 else
@@ -295,7 +263,7 @@ if [ ! -f "${loadDataDir}/${tsbs_case}_${format}_scale_${scale}_${load_workers}o
         --orderquantity=${load_workers} > ${loadDataDir}/${tsbs_case}_${format}_scale_${scale}_${load_workers}order.dat
     sleep 10
 else
-    echo load data already exists 
+    echo load data already exists
 fi
 
 
@@ -344,7 +312,7 @@ echo "load data success"
 sleep 10
 
 cd ${workspace}/bin
-LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:26257 --execute="select * from kwdb_internal.ranges where table_name='cpu';" > ${queryResultDir}/ranges_info.log
+LD_LIBRARY_PATH=../lib ./kwbase sql --insecure --host=${ip}:${ports[0]} --execute="select * from kwdb_internal.ranges where table_name='cpu';" > ${queryResultDir}/ranges_info.log
 echo "write range info success"
 
 

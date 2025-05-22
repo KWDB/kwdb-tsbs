@@ -51,9 +51,9 @@ func (d *dbCreator) CreateDB(dbName string) error {
 			sqlpartition := fmt.Sprintf("alter table %s.cpu partition by hashpoint(partition p0 values from (0) to (666), partition p1 values from (666) to (1332), partition p2 values from (1332) to (2000));", dbName)
 			_, err = d.db.Connection.Exec(ctx, sqlpartition)
 
-			sqlpartition = fmt.Sprintf("ALTER PARTITION p0 OF TABLE benchmark.cpu CONFIGURE ZONE USING lease_preferences = '[[+region=NODE1]]',constraints = '{\"+region=NODE1\":1}',num_replicas=3;" +
-				"ALTER PARTITION p1 OF TABLE benchmark.cpu CONFIGURE ZONE USING lease_preferences = '[[+region=NODE2]]',constraints = '{\"+region=NODE2\":1}',num_replicas=3;" +
-				"ALTER PARTITION p2 OF TABLE benchmark.cpu CONFIGURE ZONE USING lease_preferences = '[[+region=NODE3]]',constraints = '{\"+region=NODE3\":1}',num_replicas=3;")
+			sqlpartition = fmt.Sprintf("ALTER PARTITION p0 OF TABLE %s.cpu CONFIGURE ZONE USING lease_preferences = '[[+region=NODE1]]',constraints = '{\"+region=NODE1\":1}',num_replicas=3;"+
+				"ALTER PARTITION p1 OF TABLE %s.cpu CONFIGURE ZONE USING lease_preferences = '[[+region=NODE2]]',constraints = '{\"+region=NODE2\":1}',num_replicas=3;"+
+				"ALTER PARTITION p2 OF TABLE %s.cpu CONFIGURE ZONE USING lease_preferences = '[[+region=NODE3]]',constraints = '{\"+region=NODE3\":1}',num_replicas=3;", dbName, dbName, dbName)
 			_, err = d.db.Connection.Exec(ctx, sqlpartition)
 
 			// 暂停一分钟
