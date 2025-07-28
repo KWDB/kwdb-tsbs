@@ -33,7 +33,7 @@ type prepareProcessoriot struct {
 	workerIndex int
 
 	// prepare buff
-	buffer               map[string]*fixedArgList // tableName, fixedArgList
+	buffer               map[string]*fixedArgList
 	buffInited           bool
 	formatBufReadings    []int16
 	formatBufDiagnostics []int16

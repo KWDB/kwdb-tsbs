@@ -27,6 +27,7 @@ const (
 	QueryTypeSingleGroupby5_8_1  = "single-groupby-5-8-1"
 )
 
+// 用于prepare查询时的参数缓存、数据管理和写入控制
 type fixedArgList struct {
 	args     [][]byte
 	capacity int

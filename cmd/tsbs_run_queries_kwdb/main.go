@@ -81,7 +81,8 @@ func (p *processor) Init(workerNum int) {
 		printResponse: runner.DoPrintResponses(),
 	}
 	ctx := context.Background()
-	_, err = p.db.Connection.Exec(ctx, "set enable_timebucket_opt = true;set max_push_limit_number = 10000000; set can_push_sorter = true;")
+	// 此配置用于打开time_bucket+聚合计算的SQL语句的下推计算功能.范围是sessions级别的，只针对于当前窗口
+	_, err = p.db.Connection.Exec(ctx, "set enable_timebucket_opt = true;")
 	if err != nil {
 		//	panic(err)
 	}
@@ -117,15 +118,6 @@ func (p *processor) ProcessQuery(q query.Query, prepare bool) ([]*query.Stat, er
 				return nil, err
 			}
 
-			//var max int64
-			//var timestamp time.Time
-			//for rows.Next() {
-			//	if err = rows.Scan(&timestamp, &max); err == nil {
-			//		fmt.Printf("%d %d\n", timestamp.UTC().UnixNano(), max)
-			//	} else {
-			//		fmt.Printf("query error\n")
-			//	}
-			//}
 			rows.Close()
 		} else {
 			fmt.Println(querys)
@@ -137,15 +129,6 @@ func (p *processor) ProcessQuery(q query.Query, prepare bool) ([]*query.Stat, er
 				panic(res.Err)
 			}
 			tableBuffer.Reset()
-
-			//// 获取返回的行数据
-			//rows := res.Rows
-			//for _, row := range rows {
-			//	// 遍历每一列
-			//	for colIdx, col := range row {
-			//		fmt.Printf("Column %d: %v\n", colIdx, col)
-			//	}
-			//}
 		}
 	}
 	took := float64(time.Since(start).Nanoseconds()) / 1e6

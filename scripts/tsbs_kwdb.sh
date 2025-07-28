@@ -27,6 +27,15 @@ parallel_degree=${parallel_degree:-8}  # 查询并行性，默认为 8
 ## 数据写入配置
 insert_type=${insert_type:-insert}  # 写入方式，默认为 insert,可设置：insert、prepare、prepareiot
 tsbs_case=${tsbs_case:-cpu-only}    # case 类型，默认为 cpu-only, 可设置：iot
+
+    注：case 与 insert-type 的对应关系如下：
+    | case     | insert-type |
+    |----------|-------------|
+    | cpu-only | insert      |
+    | cpu-only | prepare     |
+    | IoT      | insert      |
+    | IoT      | prepareiot  |
+
 prepare=${prepare:-false}           # 是否使用模板查询，默认为false
 load_workers=${load_workers:-12}    # 并发数据加载次数，默认为 12
 
