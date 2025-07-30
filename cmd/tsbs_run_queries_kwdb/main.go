@@ -101,6 +101,9 @@ func (p *processor) Init(workerNum int) {
 func (p *processor) ProcessQuery(q query.Query, prepare bool) ([]*query.Stat, error) {
 	tq := q.(*query.Kwdb)
 
+	if tq.Querytype != querytype {
+		panic(fmt.Sprintf("The specified query type \"%s\" is inconsistent with the query file type \"%s\"", querytype, tq.Querytype))
+	}
 	start := time.Now()
 	qry := string(tq.SqlQuery)
 	if p.opts.debug {
