@@ -64,21 +64,39 @@ func (d *Devops) GroupByTime(qi query.Query, nHosts, numMetrics int, timeRange t
 	}
 
 	sql := ""
+	var prepare bool
+	if kaiwudb, ok := qi.(*query.Kwdb); ok {
+		prepare = kaiwudb.GetPrepare()
+	}
 	if nHosts == 1 {
 		panicIfErr(err)
-		sql = fmt.Sprintf(`SELECT time_bucket(k_timestamp, '60s') as k_timestamp, %s FROM %s.cpu WHERE hostname='%s' AND k_timestamp >= '%s' AND k_timestamp < '%s' GROUP BY time_bucket(k_timestamp, '60s') ORDER BY time_bucket(k_timestamp, '60s')`,
-			strings.Join(selectClauses, ", "),
-			d.CPUDBName,
-			hostnames[0],
-			parseTime(time.UnixMilli(interval.StartUnixMillis()).UTC()),
-			parseTime(time.UnixMilli(interval.EndUnixMillis()).UTC()))
+		if !prepare {
+			sql = fmt.Sprintf(`SELECT time_bucket(k_timestamp, '60s') as k_timestamp, %s FROM %s.cpu WHERE hostname='%s' AND k_timestamp >= '%s' AND k_timestamp < '%s' GROUP BY time_bucket(k_timestamp, '60s') ORDER BY time_bucket(k_timestamp, '60s')`,
+				strings.Join(selectClauses, ", "),
+				d.CPUDBName,
+				hostnames[0],
+				parseTime(time.UnixMilli(interval.StartUnixMillis()).UTC()),
+				parseTime(time.UnixMilli(interval.EndUnixMillis()).UTC()))
+		} else {
+			sql = fmt.Sprintf(`%s,%d,%d`,
+				hostnames[0],
+				interval.StartUnixMillis(),
+				interval.EndUnixMillis())
+		}
 	} else {
-		sql = fmt.Sprintf(`SELECT time_bucket(k_timestamp, '60s') as k_timestamp, %s FROM %s.cpu WHERE hostname IN (%s) AND k_timestamp >= '%s' AND k_timestamp < '%s' GROUP BY time_bucket(k_timestamp,'60s') ORDER BY time_bucket(k_timestamp,'60s')`,
-			strings.Join(selectClauses, ", "),
-			d.CPUDBName,
-			"'"+strings.Join(hostnames, "', '")+"'",
-			parseTime(time.UnixMilli(interval.StartUnixMillis()).UTC()),
-			parseTime(time.UnixMilli(interval.EndUnixMillis()).UTC()))
+		if !prepare {
+			sql = fmt.Sprintf(`SELECT time_bucket(k_timestamp, '60s') as k_timestamp, %s FROM %s.cpu WHERE hostname IN (%s) AND k_timestamp >= '%s' AND k_timestamp < '%s' GROUP BY time_bucket(k_timestamp,'60s') ORDER BY time_bucket(k_timestamp,'60s')`,
+				strings.Join(selectClauses, ", "),
+				d.CPUDBName,
+				"'"+strings.Join(hostnames, "', '")+"'",
+				parseTime(time.UnixMilli(interval.StartUnixMillis()).UTC()),
+				parseTime(time.UnixMilli(interval.EndUnixMillis()).UTC()))
+		} else {
+			sql = fmt.Sprintf(`%s,%d,%d`,
+				strings.Join(hostnames, ","),
+				interval.StartUnixMillis(),
+				interval.EndUnixMillis())
+		}
 	}
 
 	humanLabel := fmt.Sprintf("KWDB %d cpu metric(s), random %4d hosts, random %s by 1m", numMetrics, nHosts, timeRange)
@@ -88,9 +106,19 @@ func (d *Devops) GroupByTime(qi query.Query, nHosts, numMetrics int, timeRange t
 
 func (d *Devops) GroupByOrderByLimit(qi query.Query) {
 	interval := d.Interval.MustRandWindow(time.Hour)
-	sql := fmt.Sprintf(`SELECT time_bucket(k_timestamp, '60s') as k_timestamp, max(usage_user) FROM %s.cpu WHERE k_timestamp < '%s' GROUP BY time_bucket(k_timestamp, '60s') ORDER BY time_bucket(k_timestamp, '60s') LIMIT 5`,
-		d.CPUDBName,
-		parseTime(time.UnixMilli(interval.EndUnixMillis()).UTC()))
+	var prepare bool
+	if kaiwudb, ok := qi.(*query.Kwdb); ok {
+		prepare = kaiwudb.GetPrepare()
+	}
+	var sql string
+	if !prepare {
+		sql = fmt.Sprintf(`SELECT time_bucket(k_timestamp, '60s') as k_timestamp, max(usage_user) FROM %s.cpu WHERE k_timestamp < '%s' GROUP BY time_bucket(k_timestamp, '60s') ORDER BY time_bucket(k_timestamp, '60s') LIMIT 5`,
+			d.CPUDBName,
+			parseTime(time.UnixMilli(interval.EndUnixMillis()).UTC()))
+	} else {
+		sql = fmt.Sprintf(`%d`,
+			interval.EndUnixMillis())
+	}
 
 	humanLabel := "KWDB max cpu over last 5 min-intervals (random end)"
 	humanDesc := fmt.Sprintf("%s: %s", humanLabel, interval.EndString())
@@ -102,13 +130,23 @@ func (d *Devops) GroupByTimeAndPrimaryTag(qi query.Query, numMetrics int) {
 	metrics, err := devops.GetCPUMetricsSlice(numMetrics)
 	panicIfErr(err)
 	interval := d.Interval.MustRandWindow(devops.DoubleGroupByDuration)
-
+	var prepare bool
+	if kaiwudb, ok := qi.(*query.Kwdb); ok {
+		prepare = kaiwudb.GetPrepare()
+	}
 	selectClauses := d.getSelectClausesAggMetrics("avg", metrics)
-	sql := fmt.Sprintf(`SELECT time_bucket(k_timestamp, '3600s') as k_timestamp, hostname, %s FROM %s.cpu WHERE k_timestamp >= '%s' AND k_timestamp < '%s' GROUP BY hostname, time_bucket(k_timestamp, '3600s') ORDER BY hostname, time_bucket(k_timestamp, '3600s')`,
-		strings.Join(selectClauses, ", "),
-		d.CPUDBName,
-		parseTime(time.UnixMilli(interval.StartUnixMillis()).UTC()),
-		parseTime(time.UnixMilli(interval.EndUnixMillis()).UTC()))
+	var sql string
+	if !prepare {
+		sql = fmt.Sprintf(`SELECT time_bucket(k_timestamp, '3600s') as k_timestamp, hostname, %s FROM %s.cpu WHERE k_timestamp >= '%s' AND k_timestamp < '%s' GROUP BY hostname, time_bucket(k_timestamp, '3600s') ORDER BY hostname, time_bucket(k_timestamp, '3600s')`,
+			strings.Join(selectClauses, ", "),
+			d.CPUDBName,
+			parseTime(time.UnixMilli(interval.StartUnixMillis()).UTC()),
+			parseTime(time.UnixMilli(interval.EndUnixMillis()).UTC()))
+	} else {
+		sql = fmt.Sprintf(`%d,%d`,
+			interval.StartUnixMillis(),
+			interval.EndUnixMillis())
+	}
 
 	humanLabel := devops.GetDoubleGroupByLabel("KWDB", numMetrics)
 	humanDesc := fmt.Sprintf("%s: %s", humanLabel, interval.StartString())
@@ -130,20 +168,38 @@ func (d *Devops) MaxAllCPU(qi query.Query, nHosts int, duration time.Duration) {
 		panic(fmt.Sprintf("invalid number of host: got %d", len(hostnames)))
 	}
 	sql := ""
+	var prepare bool
+	if kaiwudb, ok := qi.(*query.Kwdb); ok {
+		prepare = kaiwudb.GetPrepare()
+	}
 	if nHosts == 1 {
-		sql = fmt.Sprintf(`SELECT time_bucket(k_timestamp, '3600s') as k_timestamp, %s FROM %s.cpu WHERE hostname = '%s' AND k_timestamp >= '%s' AND k_timestamp < '%s' GROUP BY time_bucket(k_timestamp, '3600s') ORDER BY time_bucket(k_timestamp, '3600s')`,
-			strings.Join(selectClauses, ", "),
-			d.CPUDBName,
-			hostnames[0],
-			parseTime(time.UnixMilli(interval.StartUnixMillis()).UTC()),
-			parseTime(time.UnixMilli(interval.EndUnixMillis()).UTC()))
+		if !prepare {
+			sql = fmt.Sprintf(`SELECT time_bucket(k_timestamp, '3600s') as k_timestamp, %s FROM %s.cpu WHERE hostname = '%s' AND k_timestamp >= '%s' AND k_timestamp < '%s' GROUP BY time_bucket(k_timestamp, '3600s') ORDER BY time_bucket(k_timestamp, '3600s')`,
+				strings.Join(selectClauses, ", "),
+				d.CPUDBName,
+				hostnames[0],
+				parseTime(time.UnixMilli(interval.StartUnixMillis()).UTC()),
+				parseTime(time.UnixMilli(interval.EndUnixMillis()).UTC()))
+		} else {
+			sql = fmt.Sprintf(`%s,%d,%d`,
+				hostnames[0],
+				interval.StartUnixMillis(),
+				interval.EndUnixMillis())
+		}
 	} else {
-		sql = fmt.Sprintf(`SELECT time_bucket(k_timestamp, '3600s') as k_timestamp, %s FROM %s.cpu WHERE hostname IN (%s) AND k_timestamp >= '%s' AND k_timestamp < '%s' GROUP BY time_bucket(k_timestamp, '3600s') ORDER BY time_bucket(k_timestamp, '3600s')`,
-			strings.Join(selectClauses, ", "),
-			d.CPUDBName,
-			"'"+strings.Join(hostnames, "', '")+"'",
-			parseTime(time.UnixMilli(interval.StartUnixMillis()).UTC()),
-			parseTime(time.UnixMilli(interval.EndUnixMillis()).UTC()))
+		if !prepare {
+			sql = fmt.Sprintf(`SELECT time_bucket(k_timestamp, '3600s') as k_timestamp, %s FROM %s.cpu WHERE hostname IN (%s) AND k_timestamp >= '%s' AND k_timestamp < '%s' GROUP BY time_bucket(k_timestamp, '3600s') ORDER BY time_bucket(k_timestamp, '3600s')`,
+				strings.Join(selectClauses, ", "),
+				d.CPUDBName,
+				"'"+strings.Join(hostnames, "', '")+"'",
+				parseTime(time.UnixMilli(interval.StartUnixMillis()).UTC()),
+				parseTime(time.UnixMilli(interval.EndUnixMillis()).UTC()))
+		} else {
+			sql = fmt.Sprintf(`%s,%d,%d`,
+				strings.Join(hostnames, ","),
+				interval.StartUnixMillis(),
+				interval.EndUnixMillis())
+		}
 	}
 	humanLabel := devops.GetMaxAllLabel("KWDB", nHosts)
 	humanDesc := fmt.Sprintf("%s: %s", humanLabel, interval.StartString())
@@ -157,10 +213,18 @@ func (d *Devops) LastPointPerHost(qi query.Query) {
 	if len(selectClauses) != devops.GetCPUMetricsLen() {
 		panic(fmt.Sprintf("invalid number of select clauses: got %d", len(selectClauses)))
 	}
-
-	sql := fmt.Sprintf(`SELECT last_row(k_timestamp), %s, hostname FROM %s.cpu GROUP BY hostname`,
-		strings.Join(selectClauses, ", "),
-		d.CPUDBName)
+	var prepare bool
+	if kaiwudb, ok := qi.(*query.Kwdb); ok {
+		prepare = kaiwudb.GetPrepare()
+	}
+	var sql string
+	if !prepare {
+		sql = fmt.Sprintf(`SELECT last_row(k_timestamp), %s, hostname FROM %s.cpu GROUP BY hostname`,
+			strings.Join(selectClauses, ", "),
+			d.CPUDBName)
+	} else {
+		sql = fmt.Sprintf(``)
+	}
 
 	humanLabel := "KWDB last row per host"
 	humanDesc := humanLabel
@@ -169,20 +233,45 @@ func (d *Devops) LastPointPerHost(qi query.Query) {
 
 func (d *Devops) HighCPUForHosts(qi query.Query, nHosts int) {
 	interval := d.Interval.MustRandWindow(devops.HighCPUDuration)
+	//var hostWhereClause string
+	//if nHosts == 0 {
+	//	hostWhereClause = ""
+	//} else {
+	//	hostWhereClause = fmt.Sprintf("AND %s", d.getHostWhereString(nHosts))
+	//}
+	var prepare bool
+	if kaiwudb, ok := qi.(*query.Kwdb); ok {
+		prepare = kaiwudb.GetPrepare()
+	}
+
 	sql := ""
 	if nHosts == 1 {
 		hostnames, err := d.GetRandomHosts(nHosts)
 		panicIfErr(err)
-		sql = fmt.Sprintf(`SELECT k_timestamp,usage_user,usage_system,usage_idle,usage_nice,usage_iowait,usage_irq,usage_softirq,usage_steal,usage_guest,usage_guest_nice FROM %s.cpu WHERE hostname='%s' AND usage_user > 90.0 AND k_timestamp >= '%s' AND k_timestamp < '%s'`,
-			d.CPUDBName,
-			hostnames[0],
-			parseTime(time.UnixMilli(interval.StartUnixMillis()).UTC()),
-			parseTime(time.UnixMilli(interval.EndUnixMillis()).UTC()))
+		if !prepare {
+			sql = fmt.Sprintf(`SELECT k_timestamp,usage_user,usage_system,usage_idle,usage_nice,usage_iowait,usage_irq,usage_softirq,usage_steal,usage_guest,usage_guest_nice FROM %s.cpu WHERE hostname='%s' AND usage_user > 90.0 AND k_timestamp >= '%s' AND k_timestamp < '%s'`,
+				d.CPUDBName,
+				d.CPUDBName,
+				hostnames[0],
+				parseTime(time.UnixMilli(interval.StartUnixMillis()).UTC()),
+				parseTime(time.UnixMilli(interval.EndUnixMillis()).UTC()))
+		} else {
+			sql = fmt.Sprintf(`%s,%d,%d`,
+				hostnames[0],
+				interval.StartUnixMillis(),
+				interval.EndUnixMillis())
+		}
 	} else {
-		sql = fmt.Sprintf(`SELECT k_timestamp,usage_user,usage_system,usage_idle,usage_nice,usage_iowait,usage_irq,usage_softirq,usage_steal,usage_guest,usage_guest_nice FROM %s.cpu WHERE usage_user > 90.0 AND k_timestamp >= '%s' AND k_timestamp < '%s'`,
-			d.CPUDBName,
-			parseTime(time.UnixMilli(interval.StartUnixMillis()).UTC()),
-			parseTime(time.UnixMilli(interval.EndUnixMillis()).UTC()))
+		if !prepare {
+			sql = fmt.Sprintf(`SELECT k_timestamp,usage_user,usage_system,usage_idle,usage_nice,usage_iowait,usage_irq,usage_softirq,usage_steal,usage_guest,usage_guest_nice FROM %s.cpu WHERE usage_user > 90.0 AND k_timestamp >= '%s' AND k_timestamp < '%s'`,
+				d.CPUDBName,
+				parseTime(time.UnixMilli(interval.StartUnixMillis()).UTC()),
+				parseTime(time.UnixMilli(interval.EndUnixMillis()).UTC()))
+		} else {
+			sql = fmt.Sprintf(`%d,%d`,
+				interval.StartUnixMillis(),
+				interval.EndUnixMillis())
+		}
 	}
 	humanLabel, err := devops.GetHighCPULabel("KWDB", nHosts)
 	panicIfErr(err)

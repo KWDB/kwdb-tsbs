@@ -60,7 +60,7 @@ func (b *benchmark) GetPointIndexer(maxPartitions uint) targets.PointIndexer {
 		for i := 0; i < b.opts.Workers; i++ {
 			nc.chans = append(nc.chans, i)
 		}
-		return &indexer{buffer: &bytes.Buffer{}, prefix: prefix, hashEndGroups: hashEndGroups, partitions: int(maxPartitions), tmp: map[string]uint{}, numChan: b.opts.Workers, node2Chan: nc}
+		return &indexer{buffer: &bytes.Buffer{}, prefix: prefix, hashEndGroups: hashEndGroups, partitions: int(maxPartitions), tmp: map[string]uint{}, numChan: b.opts.Workers, node2Chan: nc, ChansLen: b.opts.Workers}
 	}
 	return &targets.ConstantIndexer{}
 }

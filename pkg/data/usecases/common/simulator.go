@@ -23,6 +23,8 @@ type BaseSimulatorConfig struct {
 	GeneratorScale uint64
 	// GeneratorConstructor is the function used to create a new Generator given an id number and start time
 	GeneratorConstructor func(i int, start time.Time) Generator
+
+	Orderquantity int
 }
 
 func calculateEpochs(duration time.Duration, interval time.Duration) uint64 {
@@ -58,6 +60,8 @@ func (sc *BaseSimulatorConfig) NewSimulator(interval time.Duration, limit uint64
 		interval:        interval,
 
 		simulatedMeasurementIndex: 0,
+
+		Orderquantity: sc.Orderquantity,
 	}
 
 	return sim
@@ -97,6 +101,15 @@ type BaseSimulator struct {
 	interval       time.Duration
 
 	simulatedMeasurementIndex int
+
+	Orderquantity int
+	orderindex    uint64
+	lastindex     uint64
+	timeindex     int
+	deviceindex   int
+	count         uint64
+	shouldProcess bool
+	cycleCheck    int
 }
 
 // Finished tells whether we have simulated all the necessary points.
@@ -106,30 +119,67 @@ func (s *BaseSimulator) Finished() bool {
 
 // Next advances a Point to the next state in the generator.
 func (s *BaseSimulator) Next(p *data.Point) bool {
-	if s.generatorIndex == uint64(len(s.generators)) {
-		s.generatorIndex = 0
-		s.simulatedMeasurementIndex++
+	intervalCount := int(s.timestampEnd.Sub(s.timestampStart) / s.interval)
+
+	if s.cycleCheck+1 == intervalCount*2 {
+		s.orderindex = 0
 	}
 
-	if s.simulatedMeasurementIndex == len(s.generators[0].Measurements()) {
-		s.simulatedMeasurementIndex = 0
+	if s.generatorIndex != 0 && s.generatorIndex%uint64(s.Orderquantity/2) == 0 ||
+		s.generatorIndex == s.initGenerators {
+		s.orderindex++
+		if s.simulatedMeasurementIndex == 0 {
+			s.generatorIndex = s.lastindex
+			s.simulatedMeasurementIndex++
+		} else {
+			s.simulatedMeasurementIndex--
+		}
+		s.cycleCheck++
+	}
 
-		for i := 0; i < len(s.generators); i++ {
+	if s.generatorIndex%uint64(s.Orderquantity/2) != 0 && s.orderindex != 0 &&
+		s.orderindex%2 == 0 && s.timeindex < intervalCount {
+		s.simulatedMeasurementIndex, s.generatorIndex = 0, s.lastindex
+		end := uint64(s.Orderquantity/2) + s.lastindex
+		if end > s.initGenerators {
+			end = s.initGenerators
+		}
+		for i := s.lastindex; i < end; i++ {
 			s.generators[i].TickAll(s.interval)
 		}
-
+		s.timeindex++
+		s.orderindex = 0
+		s.shouldProcess = true
 		s.adjustNumHostsForEpoch()
 	}
 
+	if int(s.generatorIndex) >= len(s.generators) {
+		s.madePoints = s.maxPoints
+		return false
+	}
 	generator := s.generators[s.generatorIndex]
-
 	// Populate the Generator tags.
 	for _, tag := range generator.Tags() {
 		p.AppendTag(tag.Key, tag.Value)
 	}
-
 	// Populate measurement-specific tags and fields:
 	generator.Measurements()[s.simulatedMeasurementIndex].ToPoint(p)
+	if s.shouldProcess && s.timeindex != 0 && intervalCount >= s.timeindex {
+		if s.timeindex == intervalCount {
+			s.count++
+		} else {
+			s.generatorIndex = s.lastindex
+		}
+		s.lastindex = s.generatorIndex
+		s.shouldProcess = false
+	}
+
+	if s.timeindex == intervalCount && s.simulatedMeasurementIndex == 1 &&
+		int(s.generatorIndex+1)%(s.Orderquantity/2) == 0 {
+		s.generatorIndex = uint64(s.Orderquantity/2)*s.count - 1
+		s.lastindex = s.generatorIndex + 1
+		s.timeindex, s.deviceindex, s.orderindex = 0, 0, 0
+	}
 
 	ret := s.generatorIndex < s.epochGenerators
 	s.madePoints++

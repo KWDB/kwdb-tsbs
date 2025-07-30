@@ -53,7 +53,8 @@ type Simulator struct {
 	outOfOrderEntries []*data.Point
 	// offset is used for dealing with batch generation and keeping the
 	// insert index consistent.
-	offset int
+	offset        int
+	Orderquantity int
 }
 
 // Fields returns the fields of an entry.
@@ -80,7 +81,7 @@ func (s Simulator) Finished() bool {
 // If the current pregenerated batch is empty, it tries to generate a new one
 // in order to populate the next entry.
 func (s *Simulator) Next(p *data.Point) bool {
-	if s.batchSize == 0 {
+	if s.batchSize == 0 { //todo 一批条目默认大小
 		return s.base.Next(p)
 	}
 

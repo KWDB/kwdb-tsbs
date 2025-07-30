@@ -38,6 +38,7 @@ type BenchmarkRunnerConfig struct {
 	PrintInterval    uint64 `mapstructure:"print-interval"`
 	PrewarmQueries   bool   `mapstructure:"prewarm-queries"`
 	ResultsFile      string `mapstructure:"results-file"`
+	Prepare          bool
 }
 
 // AddToFlagSet adds command line flags needed by the BenchmarkRunnerConfig to the flag set.
@@ -55,6 +56,8 @@ func (c BenchmarkRunnerConfig) AddToFlagSet(fs *pflag.FlagSet) {
 	fs.Int("debug", 0, "Whether to print debug messages.")
 	fs.String("file", "", "File name to read queries from")
 	fs.String("results-file", "", "Write the test results summary json to this file")
+	fs.String("query-type", "", "")
+	fs.Bool("prepare", false, "")
 }
 
 // BenchmarkRunner contains the common components for running a query benchmarking
@@ -222,7 +225,7 @@ func (b *BenchmarkRunner) processorHandler(wg *sync.WaitGroup, rateLimiter *rate
 		r := rateLimiter.Reserve()
 		time.Sleep(r.Delay())
 
-		stats, err := processor.ProcessQuery(query, false)
+		stats, err := processor.ProcessQuery(query, b.Prepare)
 		if err != nil {
 			panic(err)
 		}

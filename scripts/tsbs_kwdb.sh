@@ -2,7 +2,7 @@
 # ==============================================
 # KWDB-tsbs 基准参数配置脚本
 # 说明：用于定义 KWDB 性能测试的默认参数
-# 用法：使用命令行：`Parameter=Value ./tsbs_kwdb.sh`（例如：`workspace="/root" scale=4000./tsbs_multi_server.sh`）
+# 用法：使用命令行：`Parameter=Value ./tsbs_kwdb.sh`（例如：`workspace="/root" scale=4000 ./tsbs_kwdb.sh`）
 # ==============================================
 
 # -----------------------------------------------------------------------------
@@ -25,7 +25,18 @@ enable_perf=${enable_perf:-false}
 parallel_degree=${parallel_degree:-8}  # 查询并行性，默认为 8
 
 ## 数据写入配置
-insert_type=${insert_type:-insert}  # 写入方式，默认为 insert
+insert_type=${insert_type:-insert}  # 写入方式，默认为 insert,可设置：insert、prepare、prepareiot
+tsbs_case=${tsbs_case:-cpu-only}    # case 类型，默认为 cpu-only, 可设置：iot
+
+    注：case 与 insert-type 的对应关系如下：
+    | case     | insert-type |
+    |----------|-------------|
+    | cpu-only | insert      |
+    | cpu-only | prepare     |
+    | IoT      | insert      |
+    | IoT      | prepareiot  |
+
+prepare=${prepare:-false}           # 是否使用模板查询，默认为false
 load_workers=${load_workers:-12}    # 并发数据加载次数，默认为 12
 
 ## 群集配置
@@ -44,7 +55,7 @@ ts_automatic_collection=${ts_automatic_collection:-false}
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 printf "%-20s %-20s %-20s %-20s\n" \
-  "scale=${scale}" "format=${format}" "query_workers=${query_workers}" "query_times=${query_times}" \
+  "scale=${scale}" "format=${format}" "query_workers=${query_workers}" "query_times=${query_times}" "prepare=${prepare}"\
   "enable_perf=${enable_perf}" "insert_type=${insert_type}" "node_num=${node_num}" "cluster_node_num=${cluster_node_num}" \
   "wal=${wal}" "replica_mode=${replica_mode}" "ip=${ip}" "ports=${ports}" \
   "load_workers=${load_workers}" "parallel_degree=${parallel_degree}" "enable_buffer_pool=${enable_buffer_pool}" "httpports=${httpports}" \
@@ -68,6 +79,8 @@ echo "-----------server:${node_num}node mode${replica_mode}-----------"
 
 for ((i=1;i<=${node_num};i++))
 do
+    listenport=$((${i}+26256))
+    httpport=$((${i}+8980))
     store=${data_dir}/kwbase-data${i}
     rm -rf ${data_dir}/kwbase-data${i}
     sleep 10
@@ -161,9 +174,9 @@ kwdb_ip=$(ps -ef | grep kwbase | awk 'NR==1{print $11}' | awk -F ':' '{print $1}
 kwdb_port=$(ps -ef | grep kwbase | awk 'NR==1{print $11}' | awk -F ':' '{print $2}')
 echo "kwdb me_ip="${kwdb_ip}" me_port="${kwdb_port}""
 
-#case 类型
-#[cpu-only | devops | iot ]
-tsbs_case="cpu-only"
+##case 类型
+##[cpu-only | iot ]
+#tsbs_case="cpu-only"
 
 time=`date +%Y_%m%d_%H%M%S`
 
@@ -230,7 +243,7 @@ else
    echo "use defalut query end time"
 fi
 
-QUERY_TYPES_ALL="\
+CPUONLY_QUERY_TYPES_ALL="\
 single-groupby-1-1-1 \
 single-groupby-1-1-12 \
 single-groupby-1-8-1 \
@@ -246,6 +259,21 @@ high-cpu-all \
 high-cpu-1 \
 lastpoint \
 groupby-orderby-limit"
+
+IOT_QUERY_TYPES_ALL="\
+last-loc \
+single-last-loc \
+low-fuel \
+high-load \
+stationary-trucks \
+long-driving-sessions \
+long-daily-sessions \
+avg-vs-projected-fuel-consumption \
+avg-daily-driving-duration \
+avg-daily-driving-session \
+avg-load \
+daily-activity \
+breakdown-frequency"
 
 
 # 生成导入数据
@@ -267,6 +295,12 @@ else
 fi
 
 
+if [ ${tsbs_case} == "cpu-only" ]; then
+    QUERY_TYPES_ALL=${CPUONLY_QUERY_TYPES_ALL}
+elif [ ${tsbs_case} == "iot" ]; then
+    QUERY_TYPES_ALL=${IOT_QUERY_TYPES_ALL}
+fi
+
 echo "start to generate query data"
 for QUERY_TYPE in ${QUERY_TYPES_ALL}; do
 if [ ! -f "${queryDataDir}/${format}_scale${scale}_${tsbs_case}_${QUERY_TYPE}_query_times${query_times}.dat" ]; then
@@ -280,6 +314,7 @@ if [ ! -f "${queryDataDir}/${format}_scale${scale}_${tsbs_case}_${QUERY_TYPE}_qu
     --queries=${query_times} \
     --timestamp-start=${query_ts_start} \
     --timestamp-end=${query_ts_end} \
+    --prepare=${prepare}\
     --db-name=${db_name} | gzip > ${queryDataDir}/${format}_scale${scale}_${tsbs_case}_${QUERY_TYPE}_query_times${query_times}.dat.gz
 
     gunzip ${queryDataDir}/${format}_scale${scale}_${tsbs_case}_${QUERY_TYPE}_query_times${query_times}.dat.gz
@@ -326,7 +361,9 @@ for QUERY_TYPE in ${QUERY_TYPES_ALL}; do
    --pass=1234 \
    --host=${kwdb_ip} \
    --port=${kwdb_port} \
-   --workers=${query_workers} > ${queryResultDir}/${format}_scale${scale}_${tsbs_case}_${QUERY_TYPE}_worker1.log
+   --prepare=${prepare}\
+   --workers=${query_workers}\
+   --query-type=${QUERY_TYPE} > ${queryResultDir}/${format}_scale${scale}_${tsbs_case}_${QUERY_TYPE}_worker1.log
 
    sleep 10
    echo "run query ${QUERY_TYPE} worker 1 success"
@@ -342,7 +379,9 @@ for QUERY_TYPE in ${QUERY_TYPES_ALL}; do
    --pass=1234 \
    --host=${kwdb_ip} \
    --port=${kwdb_port} \
-   --workers=${query_workers} > ${queryResultDir}/${format}_scale${scale}_${tsbs_case}_${QUERY_TYPE}_worker8.log
+    --prepare=${prepare}\
+   --workers=${query_workers} \
+   --query-type=${QUERY_TYPE} > ${queryResultDir}/${format}_scale${scale}_${tsbs_case}_${QUERY_TYPE}_worker8.log
 
    sleep 10
    echo "run query ${QUERY_TYPE} worker 8 success"

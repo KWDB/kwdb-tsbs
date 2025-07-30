@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/gob"
 	"fmt"
+	"github.com/timescale/tsbs/pkg/query"
 	"io"
 	"math/rand"
 	"os"
@@ -109,7 +110,7 @@ func (g *QueryGenerator) init(conf common.GeneratorConfig) error {
 		return err
 	}
 
-	if g.conf.Format == "kwdb" && g.conf.Use != common.UseCaseCPUOnly {
+	if g.conf.Format == "kwdb" && g.conf.Use != common.UseCaseCPUOnly && g.conf.Use != common.UseCaseIoT {
 		return fmt.Errorf(errCannotUsecaseType, g.conf.Use)
 	}
 	if err := g.initFactories(); err != nil {
@@ -222,6 +223,10 @@ func (g *QueryGenerator) runQueryGeneration(useGen queryUtils.QueryGenerator, fi
 
 	for i := 0; i < int(c.Limit); i++ {
 		q := useGen.GenerateEmptyQuery()
+		if kaiwudb, ok := q.(*query.Kwdb); ok {
+			kaiwudb.SetQuerytype(c.QueryType)
+			kaiwudb.SetPrepare(c.Prepare)
+		}
 		q = filler.Fill(q)
 
 		if currentGroup == c.InterleavedGroupID {

@@ -15,7 +15,7 @@ const errCannotUsecaseType = "kwdb cannot support this use-case '%s', currently 
 func GetSimulatorConfig(dgc *common.DataGeneratorConfig) (common.SimulatorConfig, error) {
 	var ret common.SimulatorConfig
 	var err error
-	if dgc.Format == "kwdb" && dgc.Use != common.UseCaseCPUOnly {
+	if dgc.Format == "kwdb" && dgc.Use != common.UseCaseCPUOnly && dgc.Use != common.UseCaseIoT {
 		return nil, fmt.Errorf(errCannotUsecaseType, dgc.Use)
 	}
 	tsStart, err := utils.ParseUTCTime(dgc.TimeStart)
@@ -45,6 +45,7 @@ func GetSimulatorConfig(dgc *common.DataGeneratorConfig) (common.SimulatorConfig
 			InitGeneratorScale:   dgc.InitialScale,
 			GeneratorScale:       dgc.Scale,
 			GeneratorConstructor: iot.NewTruck,
+			Orderquantity:        dgc.Orderquantity,
 		}
 	case common.UseCaseCPUOnly:
 		ret = &devops.CPUOnlySimulatorConfig{
