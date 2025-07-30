@@ -60,6 +60,14 @@ type:kwdb
 #### `-orderquantity` (type: `int`, default: `12`)
 Number of devices generated first, for example for 100 devices, format = 12 first generate data from host_0 to host_11, then generate data from host_12 to host_23, and so on
 
+#### `-outoforder` (type: `float`, default value: `0.0`)
+Set the proportion of out of order data (value range: 0.0 to 1.0; 0 represents generating data completely in order; 0.1 represents 10% of data points out of order; 1 represents completely random out of order)
+Only cpu-only scenarios are supported
+#### `-outoforderwindow` (type: `time.Duration`, default value: `0`)
+Control the time window range of out of order data and support multiple time unit formats (such as 60s, 1m, 1h, etc.)
+(0s means not enabling out of order, generate in chronological order; 60s means allowing data to be out of order within the 60s time range
+Only cpu-only scenarios are supported, the actual degree of disorder is also controlled by the outoforder parameter
+
 ---
 ## `tsbs_load_kwdb` Additional Flags
 ```bash

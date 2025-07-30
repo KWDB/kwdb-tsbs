@@ -11,12 +11,16 @@ import (
 
 const errCannotParseTimeFmt = "cannot parse time from string '%s': %v"
 const errCannotUsecaseType = "kwdb cannot support this use-case '%s', currently only supports cpu-only in devops"
+const errCannotIotOfOrder = "kwdb IOT cannot support outoforder"
 
 func GetSimulatorConfig(dgc *common.DataGeneratorConfig) (common.SimulatorConfig, error) {
 	var ret common.SimulatorConfig
 	var err error
 	if dgc.Format == "kwdb" && dgc.Use != common.UseCaseCPUOnly && dgc.Use != common.UseCaseIoT {
 		return nil, fmt.Errorf(errCannotUsecaseType, dgc.Use)
+	}
+	if dgc.Format == "kwdb" && dgc.Use == common.UseCaseIoT && (dgc.OutOfOrder != 0 || dgc.OutOfOrderWindow != 0) {
+		return nil, fmt.Errorf(errCannotIotOfOrder)
 	}
 	tsStart, err := utils.ParseUTCTime(dgc.TimeStart)
 	if err != nil {
@@ -52,10 +56,12 @@ func GetSimulatorConfig(dgc *common.DataGeneratorConfig) (common.SimulatorConfig
 			Start: tsStart,
 			End:   tsEnd,
 
-			InitHostCount:   dgc.InitialScale,
-			HostCount:       dgc.Scale,
-			HostConstructor: devops.NewHostCPUOnly,
-			Orderquantity:   dgc.Orderquantity,
+			InitHostCount:    dgc.InitialScale,
+			HostCount:        dgc.Scale,
+			HostConstructor:  devops.NewHostCPUOnly,
+			Orderquantity:    dgc.Orderquantity,
+			OutOfOrder:       dgc.OutOfOrder,
+			OutOfOrderWindow: int(dgc.OutOfOrderWindow / dgc.LogInterval),
 		}
 	case common.UseCaseCPUSingle:
 		ret = &devops.CPUOnlySimulatorConfig{

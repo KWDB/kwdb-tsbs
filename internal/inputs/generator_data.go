@@ -3,6 +3,7 @@ package inputs
 import (
 	"bufio"
 	"fmt"
+	"github.com/timescale/tsbs/pkg/data/usecases/devops"
 	"io"
 	"math/rand"
 	"os"
@@ -124,6 +125,17 @@ func (g *DataGenerator) runSimulator(sim common.Simulator, serializer serialize.
 
 		currGroupID = (currGroupID + 1) % dgc.InterleavedNumGroups
 	}
+
+	if v, ok := sim.(*devops.CPUOnlySimulator); ok {
+		for !v.IspointQueueNull() {
+			if currGroupID == dgc.InterleavedGroupID {
+				err := serializer.Serialize(v.Point(), g.bufOut)
+				if err != nil {
+					return fmt.Errorf("can not serialize point: %s", err)
+				}
+			}
+		}
+	}
 	return nil
 }
 
@@ -139,7 +151,7 @@ func (g *DataGenerator) getSerializer(sim common.Simulator, target targets.Imple
 	return target.Serializer(), nil
 }
 
-//TODO should be implemented in targets package
+// TODO should be implemented in targets package
 func (g *DataGenerator) writeHeader(headers *common.GeneratedDataHeaders) {
 	g.bufOut.WriteString("tags")
 

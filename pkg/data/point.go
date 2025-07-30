@@ -18,6 +18,7 @@ type Point struct {
 	fieldKeys       [][]byte
 	fieldValues     []interface{}
 	timestamp       *time.Time
+	Hostnumber      int
 }
 
 // NewPoint returns a new empty Point
@@ -30,6 +31,34 @@ func NewPoint() *Point {
 		fieldValues:     make([]interface{}, 0),
 		timestamp:       nil,
 	}
+}
+
+func (p *Point) DeepCopy(from *Point) {
+	p.Hostnumber = from.Hostnumber
+	p.measurementName = append([]byte(nil), from.measurementName...)
+
+	p.tagKeys = make([][]byte, len(from.tagKeys))
+	for i, key := range from.tagKeys {
+		p.tagKeys[i] = append([]byte(nil), key...)
+	}
+
+	p.tagValues = make([]interface{}, len(from.tagValues))
+	for i, val := range from.tagValues {
+		p.tagValues[i] = val
+	}
+
+	p.fieldKeys = make([][]byte, len(from.fieldKeys))
+	for i, key := range from.fieldKeys {
+		p.fieldKeys[i] = append([]byte(nil), key...)
+	}
+
+	p.fieldValues = make([]interface{}, len(from.fieldValues))
+	for i, val := range from.fieldValues {
+		p.fieldValues[i] = val
+	}
+
+	timeVal := *from.timestamp
+	p.timestamp = &timeVal
 }
 
 // Copy duplicates all the values from a given Point.
