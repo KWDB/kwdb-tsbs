@@ -1,8 +1,11 @@
 package devops
 
 import (
+	"fmt"
 	"github.com/timescale/tsbs/pkg/data"
 	"github.com/timescale/tsbs/pkg/data/usecases/common"
+	"math"
+	"math/rand"
 	"time"
 )
 
@@ -28,7 +31,91 @@ func (d *CPUOnlySimulator) Headers() *common.GeneratedDataHeaders {
 
 // Next advances a Point to the next state in the generator.
 func (d *CPUOnlySimulator) Next(p *data.Point) bool {
-	// Switch to the next metric if needed
+	if d.emptyingQueue {
+		if len(d.pointQueue) > 0 {
+			*p = *d.pointQueue[0]
+			d.pointQueue = d.pointQueue[1:]
+			return true
+		} else {
+			d.emptyingQueue = false
+			d.queueCounter = 0
+		}
+	}
+
+	updateHostIndexAndTime(d) // 检查是否需要切换到下一组指标
+	if !d.populatePoint(p, 0) {
+		return false
+	}
+
+	d.pointQueue = append(d.pointQueue, copyPoint(p)) // 加入队列
+	d.queueCounter++
+	// 检查是否需要处理乱序
+	if d.queueCounter >= d.queueSize && !d.emptyingQueue {
+		d.processOutOfOrder()
+		d.emptyingQueue = true
+		*p = *d.pointQueue[0]
+		d.pointQueue = d.pointQueue[1:]
+		return true
+	}
+	return false
+}
+
+func (d *CPUOnlySimulator) processOutOfOrder() {
+	positionGroups := make([][]*data.Point, d.Orderquantity) // 将n个点按位置分成d.Orderquantity组
+	for i := 0; i < d.Orderquantity; i++ {
+		positionGroups[i] = make([]*data.Point, 0, d.queueSize/d.Orderquantity)
+	}
+
+	for _, point := range d.pointQueue { // 将点分配到各自的序号组
+		n := point.Hostnumber % d.Orderquantity
+		positionGroups[n] = append(positionGroups[n], point)
+	}
+
+	for i := 0; i < d.Orderquantity; i++ { // 对每个序号组进行部分交换
+		group := positionGroups[i]
+		groupSize := len(group)
+		if groupSize == 0 {
+			continue
+		}
+
+		numToMove := int(math.Round(float64(d.OutOfOrder) * float64(groupSize))) // 计算该组需要移动的点数（基于总比例）
+
+		for j := 0; j < numToMove; j++ {
+			rand.Seed(time.Now().UnixNano() + int64(j)) // 添加j避免重复
+			pos := rand.Intn(groupSize)
+			point := group[pos]
+			// 从组中移除该点
+			group = append(group[:pos], group[pos+1:]...)
+			groupSize--
+			insertPos := rand.Intn(groupSize)
+			for insertPos == pos && groupSize > 1 { // 确保插入位置不是原位置
+				insertPos = rand.Intn(groupSize)
+			}
+			group = append(group[:insertPos], append([]*data.Point{point}, group[insertPos:]...)...) // 插入到新位置
+			groupSize++
+		}
+		positionGroups[i] = group
+	}
+
+	d.pointQueue = make([]*data.Point, 0, d.queueSize) // 重新构建pointQueue，保持原来的分组结构但内部顺序已打乱
+	maxLen := 0
+	for _, group := range positionGroups {
+		if len(group) > maxLen {
+			maxLen = len(group)
+		}
+	}
+
+	for groupIdx := 0; groupIdx < maxLen; groupIdx++ {
+		for pointIdx := 0; pointIdx < d.Orderquantity; pointIdx++ {
+			if groupIdx < len(positionGroups[pointIdx]) {
+				d.pointQueue = append(d.pointQueue, positionGroups[pointIdx][groupIdx])
+			}
+		}
+	}
+}
+
+// 处理乱序逻辑
+func updateHostIndexAndTime(d *CPUOnlySimulator) {
 	if d.hostIndex == uint64(d.Orderquantity*(d.number+1)) {
 		begin := d.hostIndex - uint64(d.Orderquantity)
 		end := d.hostIndex
@@ -52,7 +139,12 @@ func (d *CPUOnlySimulator) Next(p *data.Point) bool {
 		}
 		d.hostIndex = uint64(d.Orderquantity * (d.number))
 	}
-	return d.populatePoint(p, 0)
+}
+
+func copyPoint(p *data.Point) *data.Point {
+	newP := data.NewPoint()
+	newP.DeepCopy(p)
+	return newP
 }
 
 // CPUOnlySimulatorConfig is used to create a CPUOnlySimulator.
@@ -74,6 +166,18 @@ func (c *CPUOnlySimulatorConfig) NewSimulator(interval time.Duration, limit uint
 		// Set specified points number limit
 		maxPoints = limit
 	}
+
+	if int(c.End.Sub(c.Start)) < c.OutOfOrderWindow*int(interval) {
+		panic(fmt.Sprintf("OutOfOrderWindow exceeds the time range"))
+	}
+
+	var qsize int
+	if int(c.HostCount) <= c.Orderquantity {
+		qsize = int(c.HostCount) * c.OutOfOrderWindow
+	} else {
+		qsize = c.Orderquantity * c.OutOfOrderWindow
+	}
+
 	sim := &CPUOnlySimulator{&commonDevopsSimulator{
 		madePoints: 0,
 		maxPoints:  maxPoints,
@@ -89,6 +193,8 @@ func (c *CPUOnlySimulatorConfig) NewSimulator(interval time.Duration, limit uint
 		timestampEnd:   c.End,
 		interval:       interval,
 		Orderquantity:  c.Orderquantity,
+		OutOfOrder:     c.OutOfOrder,
+		queueSize:      qsize,
 	}, c.Start}
 
 	return sim

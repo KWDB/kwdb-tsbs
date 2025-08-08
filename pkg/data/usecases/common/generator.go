@@ -71,7 +71,7 @@ func (c *DataGeneratorConfig) AddToFlagSet(fs *pflag.FlagSet) {
 	fs.Uint64("max-data-points", 0, "Limit the number of data points to generate, 0 = no limit")
 	fs.Uint64("initial-scale", 0, "Initial scaling variable specific to the use case (e.g., devices in 'devops'). 0 means to use -scale value")
 	fs.Duration("log-interval", defaultLogInterval, "Duration between data points")
-
+	fs.Duration("outoforderwindow", 0, "Control the time window range of out of order data and support multiple time unit formats (such as 60s, 1m, 1h, etc.)")
 	fs.Uint("interleaved-generation-group-id", 0,
 		"Group (0-indexed) to perform round-robin serialization within. Use this to scale up data generation to multiple processes.")
 	fs.Uint("interleaved-generation-groups", 1,
@@ -110,10 +110,12 @@ type BaseConfig struct {
 	TimeStart string `yaml:"timestamp-start" mapstructure:"timestamp-start"`
 	TimeEnd   string `yaml:"timestamp-end" mapstructure:"timestamp-end"`
 
-	Seed          int64
-	Debug         int    `yaml:"debug,omitempty" mapstructure:"debug,omitempty"`
-	File          string `yaml:"file,omitempty" mapstructure:"file,omitempty"`
-	Orderquantity int
+	Seed             int64
+	Debug            int    `yaml:"debug,omitempty" mapstructure:"debug,omitempty"`
+	File             string `yaml:"file,omitempty" mapstructure:"file,omitempty"`
+	Orderquantity    int
+	OutOfOrder       float32
+	OutOfOrderWindow time.Duration
 }
 
 func (c *BaseConfig) AddToFlagSet(fs *pflag.FlagSet) {
@@ -129,6 +131,8 @@ func (c *BaseConfig) AddToFlagSet(fs *pflag.FlagSet) {
 	fs.Int("debug", 0, "Control level of debug output")
 	fs.String("file", "", "Write the output to this path")
 	fs.Int("orderquantity", 12, "Order quantity")
+	fs.Float32("outoforder", 0, "Set the proportion of out of order data (value range: 0.0 to 1.0; "+
+		"0 represents generating data completely in order; 0.1 represents 10% of data points out of order; 1 represents completely random out of order)")
 }
 
 func (c *BaseConfig) Validate() error {

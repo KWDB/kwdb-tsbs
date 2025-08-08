@@ -48,3 +48,7 @@ func newCPUMeasurementNumDistributions(start time.Time, numDistributions int) *C
 func (m *CPUMeasurement) ToPoint(p *data.Point) {
 	m.ToPointAllInt64(p, labelCPU, cpuFields)
 }
+
+func (m *CPUMeasurement) Set(t time.Time) {
+	m.Timestamp = t
+}

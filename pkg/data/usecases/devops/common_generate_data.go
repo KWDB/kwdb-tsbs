@@ -3,6 +3,8 @@ package devops
 import (
 	"github.com/timescale/tsbs/pkg/data"
 	"github.com/timescale/tsbs/pkg/data/usecases/common"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -34,6 +36,9 @@ type commonDevopsSimulatorConfig struct {
 	Cluster int
 	// The data of which node in the cluster
 	Node int
+
+	OutOfOrder       float32
+	OutOfOrderWindow int
 }
 
 func NewHostCtx(id int, start time.Time) *HostContext {
@@ -65,6 +70,12 @@ type commonDevopsSimulator struct {
 	interval       time.Duration
 	Orderquantity  int
 	number         int
+	OutOfOrder     float32
+
+	pointQueue    []*data.Point // 数据点缓存队列
+	queueCounter  int           // 计数器
+	queueSize     int           // 队列大小
+	emptyingQueue bool
 }
 
 // Finished tells whether we have simulated all the necessary points
@@ -121,6 +132,9 @@ func (s *commonDevopsSimulator) fields(measurements []common.SimulatedMeasuremen
 func (s *commonDevopsSimulator) populatePoint(p *data.Point, measureIdx int) bool {
 	host := &s.hosts[s.hostIndex]
 
+	parts := strings.Split(host.Name, "_")
+	p.Hostnumber, _ = strconv.Atoi(parts[1])
+
 	// Populate host-specific tags:
 	p.AppendTag(MachineTagKeys[0], host.Name)
 	p.AppendTag(MachineTagKeys[1], host.Region)
@@ -155,4 +169,15 @@ func (s *commonDevopsSimulator) adjustNumHostsForEpoch() {
 	s.epoch++
 	missingScale := float64(uint64(len(s.hosts)) - s.initHosts)
 	s.epochHosts = s.initHosts + uint64(missingScale*float64(s.epoch)/float64(s.epochs-1))
+}
+
+func (s *commonDevopsSimulator) IspointQueueNull() bool {
+	return len(s.pointQueue) == 0
+}
+
+func (s *commonDevopsSimulator) Point() *data.Point {
+	p := data.NewPoint()
+	*p = *s.pointQueue[0]
+	s.pointQueue = s.pointQueue[1:]
+	return p
 }
