@@ -226,6 +226,11 @@ func (p *prepareProcessoriot) Close(doLoad bool) {
 	}
 }
 
+const (
+	Len_reading     = 141
+	Len_diagnostics = 138
+)
+
 func (p *prepareProcessoriot) createDeviceAndAttribute(createSql []*point) {
 	for _, row := range createSql {
 		switch row.sqlType {
@@ -255,7 +260,7 @@ func (p *prepareProcessoriot) createDeviceAndAttribute(createSql []*point) {
 	}
 
 	for tableName, sql := range p.tables {
-		if len(sql) > 0 {
+		if len(sql) != Len_diagnostics && len(sql) != Len_reading && len(sql) > 0 {
 			sql = sql[:len(sql)-1]
 			_, err := p._db.Connection.Exec(context.Background(), sql)
 			if err != nil {
