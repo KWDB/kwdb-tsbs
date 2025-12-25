@@ -3,11 +3,12 @@ package kwdb
 import (
 	"context"
 	"fmt"
-	"github.com/timescale/tsbs/pkg/targets"
-	"github.com/timescale/tsbs/pkg/targets/kwdb/commonpool"
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/timescale/tsbs/pkg/targets"
+	"github.com/timescale/tsbs/pkg/targets/kwdb/commonpool"
 )
 
 func (fa *fixedArgList) EmplaceFloat64(value float64) {
@@ -93,6 +94,241 @@ func (p *prepareProcessoriot) Init(workerNum int, doLoad, _ bool) {
 	}
 }
 
+// fastParseInt attempts to parse an integer string with minimal overhead.
+// Returns the parsed value and true if successful, or 0 and false if parsing failed.
+// This function handles simple decimal integers (with optional leading minus sign)
+// and is designed for the common case of numeric literals.
+func fastParseInt(s string) (int64, bool) {
+	if len(s) == 0 {
+		return 0, false
+	}
+
+	var neg bool
+	var i int
+
+	// Handle sign
+	if s[0] == '-' {
+		neg = true
+		i = 1
+		if len(s) == 1 {
+			return 0, false
+		}
+	} else if s[0] == '+' {
+		i = 1
+		if len(s) == 1 {
+			return 0, false
+		}
+	}
+
+	// Parse digits
+	var n uint64
+	for ; i < len(s); i++ {
+		ch := s[i]
+		if ch < '0' || ch > '9' {
+			return 0, false
+		}
+		// Check for overflow before multiplication
+		if n > (math.MaxUint64-9)/10 {
+			return 0, false
+		}
+		n = n*10 + uint64(ch-'0')
+	}
+
+	// Check for overflow based on sign
+	if neg {
+		if n > uint64(-math.MinInt64) {
+			return 0, false
+		}
+		return -int64(n), true
+	}
+	if n > math.MaxInt64 {
+		return 0, false
+	}
+	return int64(n), true
+}
+
+// 预计算的 10 的幂次方查找表，避免使用 math.Pow10
+var float64pow10 = [...]float64{
+	1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9,
+	1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16,
+}
+
+var (
+	inf = math.Inf(1)
+	nan = math.NaN()
+)
+
+// ParseFloatFast 快速解析浮点数字符串
+// 等效于 strconv.ParseFloat(s, 64)，但更快
+// 对于大多数常见情况使用快速路径，复杂情况回退到标准库
+func ParseFloatFast(s string) (float64, error) {
+	if len(s) == 0 {
+		return 0, fmt.Errorf("cannot parse float64 from empty string")
+	}
+
+	i := uint(0)
+	minus := s[0] == '-'
+	if minus {
+		i++
+		if i >= uint(len(s)) {
+			return 0, fmt.Errorf("cannot parse float64 from %q", s)
+		}
+	}
+
+	// 处理 ".5" 这样的格式（整数部分省略）
+	if s[i] == '.' && (i+1 >= uint(len(s)) || s[i+1] < '0' || s[i+1] > '9') {
+		return 0, fmt.Errorf("missing integer and fractional part in %q", s)
+	}
+
+	d := uint64(0)
+	j := i
+
+	// 解析整数部分
+	for i < uint(len(s)) {
+		if s[i] >= '0' && s[i] <= '9' {
+			d = d*10 + uint64(s[i]-'0')
+			i++
+			if i > 18 {
+				// 整数部分可能超出 uint64 范围，回退到标准解析
+				f, err := strconv.ParseFloat(s, 64)
+				if err != nil && !math.IsInf(f, 0) {
+					return 0, err
+				}
+				return f, nil
+			}
+			continue
+		}
+		break
+	}
+
+	// 处理特殊值: inf, infinity, nan
+	if i <= j && s[i] != '.' {
+		ss := s[i:]
+		if strings.HasPrefix(ss, "+") {
+			ss = ss[1:]
+		}
+		if strings.EqualFold(ss, "inf") || strings.EqualFold(ss, "infinity") {
+			if minus {
+				return -inf, nil
+			}
+			return inf, nil
+		}
+		if strings.EqualFold(ss, "nan") {
+			return nan, nil
+		}
+		return 0, fmt.Errorf("unparsed tail left after parsing float64 from %q: %q", s, ss)
+	}
+
+	f := float64(d)
+
+	// 快速路径 - 纯整数
+	if i >= uint(len(s)) {
+		if minus {
+			f = -f
+		}
+		return f, nil
+	}
+
+	// 解析小数部分
+	if s[i] == '.' {
+		i++
+		if i >= uint(len(s)) {
+			// 小数部分可以省略，如 "123."
+			if minus {
+				f = -f
+			}
+			return f, nil
+		}
+
+		k := i
+		for i < uint(len(s)) {
+			if s[i] >= '0' && s[i] <= '9' {
+				d = d*10 + uint64(s[i]-'0')
+				i++
+				if i-j >= uint(len(float64pow10)) {
+					// 尾数超出范围，回退到标准解析
+					f, err := strconv.ParseFloat(s, 64)
+					if err != nil && !math.IsInf(f, 0) {
+						return 0, fmt.Errorf("cannot parse mantissa in %q: %s", s, err)
+					}
+					return f, nil
+				}
+				continue
+			}
+			break
+		}
+
+		if i < k {
+			return 0, fmt.Errorf("cannot find mantissa in %q", s)
+		}
+
+		// 一次性将整个尾数转换为浮点数，避免舍入误差
+		f = float64(d) / float64pow10[i-k]
+
+		// 快速路径 - 解析完成的小数
+		if i >= uint(len(s)) {
+			if minus {
+				f = -f
+			}
+			return f, nil
+		}
+	}
+
+	// 解析指数部分 (e 或 E)
+	if s[i] == 'e' || s[i] == 'E' {
+		i++
+		if i >= uint(len(s)) {
+			return 0, fmt.Errorf("cannot parse exponent in %q", s)
+		}
+
+		expMinus := false
+		if s[i] == '+' || s[i] == '-' {
+			expMinus = s[i] == '-'
+			i++
+			if i >= uint(len(s)) {
+				return 0, fmt.Errorf("cannot parse exponent in %q", s)
+			}
+		}
+
+		exp := int16(0)
+		j := i
+		for i < uint(len(s)) {
+			if s[i] >= '0' && s[i] <= '9' {
+				exp = exp*10 + int16(s[i]-'0')
+				i++
+				if exp > 300 {
+					// 指数可能超出 float64 范围，回退到标准解析
+					f, err := strconv.ParseFloat(s, 64)
+					if err != nil && !math.IsInf(f, 0) {
+						return 0, fmt.Errorf("cannot parse exponent in %q: %s", s, err)
+					}
+					return f, nil
+				}
+				continue
+			}
+			break
+		}
+
+		if i <= j {
+			return 0, fmt.Errorf("cannot parse exponent in %q", s)
+		}
+
+		if expMinus {
+			exp = -exp
+		}
+		f *= math.Pow10(int(exp))
+
+		if i >= uint(len(s)) {
+			if minus {
+				f = -f
+			}
+			return f, nil
+		}
+	}
+
+	return 0, fmt.Errorf("cannot parse float64 from %q", s)
+}
+
 func (p *prepareProcessoriot) ProcessBatch(b targets.Batch, doLoad bool) (metricCount, rowCount uint64) {
 	batches := b.(*hypertableArr)
 	rowCnt := uint64(0)
@@ -132,66 +368,14 @@ func (p *prepareProcessoriot) ProcessBatch(b targets.Batch, doLoad bool) (metric
 
 		for _, s := range args {
 			s = s[1 : len(s)-1]
-			start := 0
-			i := 0 // 字段索引
+			sLen := len(s)
 
-			if tableType == "readings" {
-				for pos, char := range s {
-					if char == ',' || pos == len(s)-1 {
-						end := pos
-						if pos == len(s)-1 {
-							end = len(s)
-						}
-						v := s[start:end]
-
-						if i == 0 { // 时间戳
-							num, _ := strconv.ParseInt(v, 10, 64)
-							tableBuffer.Emplace(uint64(num*1000) - microsecFromUnixEpochToY2K + 8*3600*1000000)
-						} else if i == 8 {
-							v = strings.TrimSpace(v)
-							vv := strings.Split(v, "'")
-							tableBuffer.Append([]byte(vv[1]))
-						} else {
-							num, _ := strconv.ParseFloat(v, 64)
-							tableBuffer.EmplaceFloat64(num)
-						}
-
-						start = pos + 1
-						i++
-					}
-				}
+			if isReadings {
+				p.parseReadingsRow(s, sLen, tableBuffer)
 			} else {
-				for pos, char := range s {
-					if char == ',' || pos == len(s)-1 {
-						end := pos
-						if pos == len(s)-1 {
-							end = len(s)
-						}
-						v := s[start:end]
-
-						// 处理每个字段
-						if i == 0 {
-							num, _ := strconv.ParseInt(v, 10, 64)
-							tableBuffer.Emplace(uint64(num*1000) - microsecFromUnixEpochToY2K + 8*3600*1000000)
-						} else if i == 4 {
-							v = strings.TrimSpace(v)
-							vv := strings.Split(v, "'")
-							tableBuffer.Append([]byte(vv[1]))
-						} else if i == 3 {
-							if num, err := strconv.ParseInt(v, 10, 64); err == nil {
-								tableBuffer.Emplace(uint64(num))
-							}
-						} else {
-							if num, err := strconv.ParseFloat(v, 64); err == nil {
-								tableBuffer.EmplaceFloat64(num)
-							}
-						}
-
-						start = pos + 1
-						i++
-					}
-				}
+				p.parseDiagnosticsRow(s, sLen, tableBuffer)
 			}
+
 			// check buffer is full
 			if tableBuffer.Length() == tableBuffer.Capacity() {
 				_, ok := p.preparedSql[tableType]
@@ -202,12 +386,89 @@ func (p *prepareProcessoriot) ProcessBatch(b targets.Batch, doLoad bool) (metric
 				p.execPrepareStmt(tableType, tableBuffer.args)
 				tableBuffer.Reset()
 			}
-
 		}
 	}
 
 	// batches.Reset()
 	return metricCnt, rowCnt
+}
+
+// parseReadingsRow
+func (p *prepareProcessoriot) parseReadingsRow(s string, sLen int, tableBuffer *fixedArgList) {
+	start := 0
+	fieldIdx := 0
+
+	for pos := 0; pos <= sLen; pos++ {
+		if pos == sLen || s[pos] == ',' {
+			v := s[start:pos]
+
+			switch fieldIdx {
+			case 0: // 时间戳
+				num, ok := fastParseInt(v)
+				if !ok {
+					num, _ = strconv.ParseInt(v, 10, 64)
+				}
+				tableBuffer.Emplace(uint64(num*1000) - microsecFromUnixEpochToY2K + 8*3600*1000000)
+			case 8: // name字段
+				if q1 := strings.IndexByte(v, '\''); q1 >= 0 {
+					if q2 := strings.IndexByte(v[q1+1:], '\''); q2 >= 0 {
+						tableBuffer.Append([]byte(v[q1+1 : q1+1+q2]))
+					}
+				}
+			default: // 浮点数字段
+				num, err := ParseFloatFast(v)
+				if err != nil {
+					num, _ = strconv.ParseFloat(v, 64)
+				}
+				tableBuffer.EmplaceFloat64(num)
+			}
+
+			start = pos + 1
+			fieldIdx++
+		}
+	}
+}
+
+// parseDiagnosticsRow
+func (p *prepareProcessoriot) parseDiagnosticsRow(s string, sLen int, tableBuffer *fixedArgList) {
+	start := 0
+	fieldIdx := 0
+
+	for pos := 0; pos <= sLen; pos++ {
+		if pos == sLen || s[pos] == ',' {
+			v := s[start:pos]
+
+			switch fieldIdx {
+			case 0: // 时间戳
+				num, ok := fastParseInt(v)
+				if !ok {
+					num, _ = strconv.ParseInt(v, 10, 64)
+				}
+				tableBuffer.Emplace(uint64(num*1000) - microsecFromUnixEpochToY2K + 8*3600*1000000)
+			case 3: // status - 整数
+				num, ok := fastParseInt(v)
+				if !ok {
+					num, _ = strconv.ParseInt(v, 10, 64)
+				}
+				tableBuffer.Emplace(uint64(num))
+			case 4: // name字段
+				if q1 := strings.IndexByte(v, '\''); q1 >= 0 {
+					if q2 := strings.IndexByte(v[q1+1:], '\''); q2 >= 0 {
+						tableBuffer.Append([]byte(v[q1+1 : q1+1+q2]))
+					}
+				}
+			default: // 浮点数字段 (1, 2)
+				num, err := ParseFloatFast(v)
+				if err != nil {
+					num, _ = strconv.ParseFloat(v, 64)
+				}
+				tableBuffer.EmplaceFloat64(num)
+			}
+
+			start = pos + 1
+			fieldIdx++
+		}
+	}
 }
 
 // 根据 tableName 获取相应的 preparesize 值
@@ -225,6 +486,11 @@ func (p *prepareProcessoriot) Close(doLoad bool) {
 		p._db.Put()
 	}
 }
+
+const (
+	Len_reading     = 141
+	Len_diagnostics = 138
+)
 
 func (p *prepareProcessoriot) createDeviceAndAttribute(createSql []*point) {
 	for _, row := range createSql {
@@ -255,7 +521,7 @@ func (p *prepareProcessoriot) createDeviceAndAttribute(createSql []*point) {
 	}
 
 	for tableName, sql := range p.tables {
-		if len(sql) > 0 {
+		if len(sql) != Len_diagnostics && len(sql) != Len_reading && len(sql) > 0 {
 			sql = sql[:len(sql)-1]
 			_, err := p._db.Connection.Exec(context.Background(), sql)
 			if err != nil {
