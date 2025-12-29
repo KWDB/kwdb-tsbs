@@ -219,7 +219,7 @@ func (d *Devops) LastPointPerHost(qi query.Query) {
 	}
 	var sql string
 	if !prepare {
-		sql = fmt.Sprintf(`SELECT last_row(k_timestamp), %s, hostname FROM %s.cpu GROUP BY hostname`,
+		sql = fmt.Sprintf(`SELECT hostname, last_row(k_timestamp), %s, hostname FROM %s.cpu GROUP BY hostname`,
 			strings.Join(selectClauses, ", "),
 			d.CPUDBName)
 	} else {

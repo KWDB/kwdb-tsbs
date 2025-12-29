@@ -44,13 +44,10 @@ func (d *dbCreator) CreateDB(dbName string) error {
 	}
 
 	if d.opts.Case == "cpu-only" {
-		sql := fmt.Sprintf("create table %s.cpu (k_timestamp timestamp not null,usage_user bigint not null,usage_system bigint not null,usage_idle bigint not null,usage_nice bigint not null,"+
-			"usage_iowait bigint not null,usage_irq bigint not null,usage_softirq bigint not null,usage_steal bigint not null,usage_guest bigint not null,usage_guest_nice bigint not null) "+
-			"tags (hostname char(30) not null,region char(30),datacenter char(30),rack char(30),os char(30),arch char(30),team char(30),service char(30),"+
-			"service_version char(30),service_environment char(30)) primary tags(hostname) partition interval 1d", dbName)
+		sql := fmt.Sprintf("create table %s.cpu (k_timestamp timestamp not null,usage_user bigint not null,usage_system bigint not null,usage_idle bigint not null,usage_nice bigint not null,usage_iowait bigint not null,usage_irq bigint not null,usage_softirq bigint not null,usage_steal bigint not null,usage_guest bigint not null,usage_guest_nice bigint not null) tags (hostname char(30) not null,region char(30),datacenter char(30),rack char(30),os char(30),arch char(30),team char(30),service char(30),service_version char(30),service_environment char(30)) primary tags(hostname)", dbName)
 		_, err = d.db.Connection.Exec(ctx, sql)
 		if err != nil && !strings.Contains(err.Error(), "already exists") {
-			panic(fmt.Sprintf("kaiwudb3.0 create table failed,err :%s", err))
+			panic(fmt.Sprintf("kwdb create table failed,err :%s", err))
 		}
 
 		if d.opts.Partition {
@@ -61,13 +58,12 @@ func (d *dbCreator) CreateDB(dbName string) error {
 				"ALTER PARTITION p1 OF TABLE %s.cpu CONFIGURE ZONE USING lease_preferences = '[[+region=NODE2]]',constraints = '{\"+region=NODE2\":1}',num_replicas=3;"+
 				"ALTER PARTITION p2 OF TABLE %s.cpu CONFIGURE ZONE USING lease_preferences = '[[+region=NODE3]]',constraints = '{\"+region=NODE3\":1}',num_replicas=3;", dbName, dbName, dbName)
 			_, err = d.db.Connection.Exec(ctx, sqlpartition)
-			if err != nil && !strings.Contains(err.Error(), "already exists") {
-				panic(fmt.Sprintf("kwdb create table failed,err :%s", err))
+			if err != nil {
+				panic(fmt.Sprintf("kwdb alter partition failed,err :%s", err))
 			}
 			// 暂停一分钟
 			time.Sleep(1 * time.Minute)
 		}
-
 	} else if d.opts.Case == "iot" {
 		fmt.Println("create iot tables")
 		readings := fmt.Sprintf("create table %s.readings (k_timestamp timestamp NOT NULL,latitude FLOAT8 NOT NULL,longitude FLOAT8 NOT NULL,elevation FLOAT8 NOT NULL,velocity FLOAT8 NOT NULL,heading FLOAT8 NOT NULL,grade FLOAT8 NOT NULL,fuel_consumption FLOAT8 NOT NULL) tags (name VARCHAR(30) NOT NULL,fleet VARCHAR(30),driver VARCHAR(30),model VARCHAR(30),device_version VARCHAR(30),load_capacity FLOAT8,fuel_capacity FLOAT8,nominal_fuel_consumption FLOAT8) primary tags(name)", dbName)
