@@ -37,6 +37,7 @@ type TSBSConfig struct {
 	DataDir    string `yaml:"data_dir"`    // 数据目录
 	QueryDir   string `yaml:"query_dir"`   // 查询目录
 	ReportsDir string `yaml:"reports_dir"` // 报告目录
+	TestDBName string `yaml:"test_dbname"` // TSBS 测试数据库名称，默认 "tsbs"，与元数据数据库分离
 	// 可选：TSBS 配置文件路径，用于读取测试目标数据库的默认配置
 	// 如果指定，可以从 TSBS 配置文件中读取 loader.db-specific 部分的配置作为默认值
 	TSBSConfigPath string `yaml:"tsbs_config_path,omitempty"` // TSBS 配置文件路径（可选）
@@ -59,6 +60,7 @@ func Load() (*Config, error) {
 	cfg.TSBS.DataDir = "./tsbs_work/load_data"
 	cfg.TSBS.QueryDir = "./tsbs_work/query_data"
 	cfg.TSBS.ReportsDir = "./tsbs_work/reports"
+	cfg.TSBS.TestDBName = "tsbs" // TSBS 测试数据库默认名称
 
 	// 从环境变量读取
 	if port := os.Getenv("TSBS_SERVER_PORT"); port != "" {

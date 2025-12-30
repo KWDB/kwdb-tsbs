@@ -19,6 +19,10 @@ Current databases supported:
 + Timestream [(supplemental docs)](timestream.md)
 + VictoriaMetrics [(supplemental docs)](victoriametrics.md)
 
+Additional tools:
+
++ TSBS MCP Server [(supplemental docs)](tsbs_mcp_server.md) - MCP protocol server for TSBS tools
+
 
 ## Overview
 

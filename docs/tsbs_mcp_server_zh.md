@@ -1,7 +1,24 @@
 # TSBS MCP Server
 
-基于 Model Context Protocol (MCP) Go SDK 实现的 TSBS 性能测试服务。
+TSBS MCP Server 是基于 Model Context Protocol (MCP) Go SDK 实现的 TSBS 性能测试服务，通过 HTTP 接口提供标准化的 MCP 协议，使 AI 助手和其他 MCP 客户端能够与 TSBS 工具进行交互。
 
+本文档是对主 README_zh 的补充，详细说明以下内容：
+
+* MCP Server 安装和配置
+* 可用的 MCP 工具
+* 配置选项和环境变量
+* API 使用示例
+
+**请务必先阅读主 README_zh [(supplemental docs)](../README_zh.md) 文档**
+
+## 概述
+
+TSBS MCP Server 将 TSBS 工具暴露为 MCP 工具，供 AI 助手或其他 MCP 客户端调用。它提供：
+
+- 异步任务执行和状态跟踪
+- 基于数据库的任务状态管理
+- Streamable HTTP 传输的 MCP 协议
+- 支持所有 TSBS 操作：数据生成、加载、查询生成和执行
 
 ## 工具列表
 
@@ -36,7 +53,7 @@ database:
   port: 26257         # 数据库端口（KWDB 默认 26257，PostgreSQL 默认 5432）
   user: "root"        # 数据库用户名
   password: ""         # 数据库密码（建议使用环境变量 TSBS_DB_PASSWORD）
-  dbname: "defaultdb"  # 数据库名称
+  dbname: "defaultdb"  # 元数据数据库名称（用于存储任务状态和结果）
   sslmode: "disable"  # SSL 模式（disable/require/verify-ca/verify-full）
   # SSL 证书配置（当 sslmode 为 verify-ca 或 verify-full 时需要）
   # sslcert: "/path/to/client.crt"      # 客户端证书文件路径（可选）
@@ -49,6 +66,7 @@ tsbs:
   data_dir: "./tsbs_work/load_data"    # 数据文件存储目录
   query_dir: "./tsbs_work/query_data"  # 查询文件存储目录
   reports_dir: "./tsbs_work/reports"    # 报告文件存储目录
+  test_dbname: "tsbs"                  # TSBS 测试数据库名
 ```
 
 ### 环境变量
@@ -81,7 +99,7 @@ tsbs:
 
 #### 数据库配置
 
-数据库用于存储任务状态、进度和结果。支持 PostgreSQL 和 KWDB。
+**元数据数据库**：用于存储任务状态、进度和结果。支持 PostgreSQL 和 KWDB。
 
 - `database.host`: 数据库主机地址
 - `database.port`: 数据库端口
@@ -89,7 +107,7 @@ tsbs:
   - PostgreSQL: 默认 5432
 - `database.user`: 数据库用户名
 - `database.password`: 数据库密码
-- `database.dbname`: 数据库名称
+- `database.dbname`: 元数据数据库名称
 - `database.sslmode`: SSL 连接模式
   - `disable`: 禁用 SSL（开发环境）
   - `require`: 需要 SSL（不验证证书）
@@ -128,6 +146,7 @@ database:
 - `tsbs.data_dir`: 生成的数据文件存储目录
 - `tsbs.query_dir`: 生成的查询文件存储目录
 - `tsbs.reports_dir`: 测试报告存储目录
+- `tsbs.test_dbname`: TSBS 测试数据库名称（默认 `"tsbs"`）
 
 ### MCP 客户端配置
 
@@ -147,8 +166,7 @@ database:
 }
 ```
 
-
-## 运行
+## 安装和运行
 
 ### 构建
 

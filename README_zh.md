@@ -70,6 +70,8 @@ kwdb-tsbs/
 ## 文档
 * 有关 KWDB-tsbs 工具的详细参数说明与使用指南，请参阅技术文档：<br>
   kwdb_zh.md [(supplemental docs)](docs/kwdb_zh.md)
+* 有关 TSBS MCP Server 的使用说明，请参阅：<br>
+  tsbs_mcp_server_zh.md [(supplemental docs)](docs/tsbs_mcp_server_zh.md)
 * 有关其他数据库的基准测试说明，请参阅通用文档:<br>
   README.md [(supplemental docs)](docs/README.md)
 

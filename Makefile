@@ -8,7 +8,7 @@ GOGET=$(GOCMD) get
 GOMOD=$(GOCMD) mod
 GOFMT=$(GOCMD) fmt
 
-.PHONY: all generators loaders runners lint fmt checkfmt mcp-server-build mcp-server-run mcp-server-deps
+.PHONY: all generators loaders runners lint fmt checkfmt mcp-server-build mcp-server-deps
 
 all: generators loaders runners
 
@@ -71,9 +71,6 @@ fmt:
 # TSBS MCP Server targets
 mcp-server-build:
 	$(GOBUILD) -o bin/tsbs-mcp-server ./cmd/tsbs-mcp-server
-
-mcp-server-run:
-	$(GOCMD) run ./cmd/tsbs-mcp-server
 
 mcp-server-deps:
 	$(GOGET) github.com/modelcontextprotocol/go-sdk/mcp

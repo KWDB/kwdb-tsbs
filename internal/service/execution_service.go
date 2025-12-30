@@ -1,11 +1,13 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/timescale/tsbs/internal/config"
@@ -103,8 +105,10 @@ func (s *ExecutionService) ExecuteGenerateData(ctx context.Context, taskID strin
 	}
 	defer outFile.Close()
 
+	// 同时捕获 stderr 以便检查错误信息
+	var stderrBuf bytes.Buffer
 	cmd.Stdout = outFile
-	cmd.Stderr = outFile
+	cmd.Stderr = &stderrBuf
 
 	if err := cmd.Start(); err != nil {
 		taskService.FailTask(bgCtx, taskID, fmt.Sprintf("Failed to start command: %v", err))
@@ -135,10 +139,72 @@ func (s *ExecutionService) ExecuteGenerateData(ctx context.Context, taskID strin
 			taskService.FailTask(bgCtx, taskID, "Task cancelled")
 			return
 		case err := <-done:
+			// 检查命令是否失败或输出文件是否包含错误信息
+			hasError := false
+			errorMsg := ""
+
 			if err != nil {
-				taskService.FailTask(bgCtx, taskID, fmt.Sprintf("Command failed: %v", err))
+				hasError = true
+				errorMsg = fmt.Sprintf("Command failed: %v", err)
+			}
+
+			// 检查 stderr 是否有错误信息
+			stderrOutput := stderrBuf.String()
+			if len(stderrOutput) > 0 {
+				hasError = true
+				if errorMsg != "" {
+					errorMsg = fmt.Sprintf("%s\nStderr: %s", errorMsg, stderrOutput)
+				} else {
+					errorMsg = fmt.Sprintf("Command error: %s", stderrOutput)
+				}
+			}
+
+			// 检查输出文件是否包含错误信息
+			if stat, statErr := os.Stat(*outputFile); statErr == nil && stat.Size() > 0 {
+				// 读取文件的前几行检查是否是错误信息
+				if content, readErr := os.ReadFile(*outputFile); readErr == nil {
+					contentStr := string(content)
+					// 检查是否以 "error:" 开头
+					if strings.HasPrefix(strings.TrimSpace(contentStr), "error:") {
+						hasError = true
+						// 提取错误信息
+						errorLines := strings.Split(contentStr, "\n")
+						errorContent := errorLines[0]
+						if len(errorContent) > 500 {
+							errorContent = errorContent[:500] + "... (truncated)"
+						}
+						if errorMsg != "" {
+							errorMsg = fmt.Sprintf("%s\nOutput file contains error: %s", errorMsg, errorContent)
+						} else {
+							errorMsg = fmt.Sprintf("Output file contains error: %s", errorContent)
+						}
+					}
+				}
+			}
+
+			if hasError {
+				fmt.Printf("[ExecuteGenerateData] ERROR: %s\n", errorMsg)
+				if failErr := taskService.FailTask(bgCtx, taskID, errorMsg); failErr != nil {
+					fmt.Printf("[ExecuteGenerateData] ERROR: Failed to update task status: %v\n", failErr)
+				} else {
+					fmt.Printf("[ExecuteGenerateData] Task %s marked as failed\n", taskID)
+				}
 				return
 			}
+
+			// 验证输出文件不为空且不是错误信息
+			if stat, statErr := os.Stat(*outputFile); statErr != nil {
+				errorMsg := fmt.Sprintf("Output file not found after command completion: %v", statErr)
+				fmt.Printf("[ExecuteGenerateData] ERROR: %s\n", errorMsg)
+				taskService.FailTask(bgCtx, taskID, errorMsg)
+				return
+			} else if stat.Size() == 0 {
+				errorMsg := "Output file is empty after command completion"
+				fmt.Printf("[ExecuteGenerateData] ERROR: %s\n", errorMsg)
+				taskService.FailTask(bgCtx, taskID, errorMsg)
+				return
+			}
+
 			result := map[string]interface{}{
 				"output_file":  *outputFile,
 				"completed_at": time.Now().Format(time.RFC3339),
@@ -321,7 +387,10 @@ func (s *ExecutionService) ExecuteGenerateQueries(ctx context.Context, taskID st
 	}
 	defer outFile.Close()
 
+	// 捕获 stderr 以便在命令失败时获取错误信息
+	var stderrBuf bytes.Buffer
 	cmd.Stdout = outFile
+	cmd.Stderr = &stderrBuf
 
 	if err := cmd.Start(); err != nil {
 		taskService.FailTask(bgCtx, taskID, fmt.Sprintf("Failed to start command: %v", err))
@@ -354,18 +423,17 @@ func (s *ExecutionService) ExecuteGenerateQueries(ctx context.Context, taskID st
 			return
 		case err := <-done:
 			if err != nil {
-				// 命令失败，尝试读取输出文件获取错误信息
+				// 命令失败，从 stderr 获取错误信息
 				errorMsg := fmt.Sprintf("Command failed: %v", err)
-				// 读取输出文件内容（包含 stderr）
-				if content, readErr := os.ReadFile(*outputFile); readErr == nil && len(content) > 0 {
+				stderrOutput := stderrBuf.String()
+				if len(stderrOutput) > 0 {
 					// 限制错误信息长度，避免过长
-					errorOutput := string(content)
-					if len(errorOutput) > 1000 {
-						errorOutput = errorOutput[:1000] + "... (truncated)"
+					if len(stderrOutput) > 1000 {
+						stderrOutput = stderrOutput[:1000] + "... (truncated)"
 					}
-					errorMsg = fmt.Sprintf("Command failed: %v\nOutput: %s", err, errorOutput)
+					errorMsg = fmt.Sprintf("Command failed: %v\nStderr: %s", err, stderrOutput)
 				} else if stat, statErr := os.Stat(*outputFile); statErr == nil && stat.Size() == 0 {
-					errorMsg = fmt.Sprintf("Command failed: %v (output file is empty)", err)
+					errorMsg = fmt.Sprintf("Command failed: %v (output file is empty, no stderr output)", err)
 				}
 				fmt.Printf("[ExecuteGenerateQueries] ERROR: %s\n", errorMsg)
 				if failErr := taskService.FailTask(bgCtx, taskID, errorMsg); failErr != nil {

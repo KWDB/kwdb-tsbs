@@ -52,7 +52,7 @@ func main() {
 	)
 
 	// 6. 注册所有工具
-	mcp_tools.RegisterTools(server, taskService, statusService, executionService)
+	mcp_tools.RegisterTools(server, taskService, statusService, executionService, cfg)
 
 	// 7. 创建 Streamable HTTP Handler
 	// 使用 Stateless 模式，不验证会话 ID，每次请求使用临时会话
