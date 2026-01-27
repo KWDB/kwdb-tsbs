@@ -52,11 +52,12 @@ func (i *indexer) GetIndex(item data.LoadedPoint) uint {
 			num = num*10 + int64(p.device[j]-'0')
 		}
 
-		modVal := i.ChansLen / 2
+		modVal := i.ChansLen
 		index := int(num) % modVal
-		if (p.sqlType != Insert && p.template == "diagnostics") || (p.sqlType == Insert && p.fieldCount != 8) {
-			index += i.numChan / 2
-		}
+		//if (p.sqlType != Insert && p.template == "diagnostics") || (p.sqlType == Insert && p.fieldCount != 8) {
+		//	index += i.numChan / 2
+		//}
+		//fmt.Println(p.device, "   ", index)
 		return uint(index)
 	}
 }
