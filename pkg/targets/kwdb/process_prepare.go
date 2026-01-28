@@ -160,7 +160,10 @@ func (p *prepareProcessor) ProcessBatch(b targets.Batch, doLoad bool) (metricCou
 			// Emplace
 			for i, v := range values {
 				if i < 11 {
-					num, _ := strconv.ParseInt(v, 10, 64)
+					num, ok := fastParseInt(v)
+					if !ok {
+						num, _ = strconv.ParseInt(v, 10, 64)
+					}
 					if i == 0 {
 						// timestamp: UTC+8 Time Zone
 						tableBuffer.Emplace(uint64(num*1000) - microsecFromUnixEpochToY2K)
