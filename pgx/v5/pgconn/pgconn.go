@@ -1414,6 +1414,9 @@ type ResultReader struct {
 	commandConcluded  bool
 	closed            bool
 	err               error
+
+	kwBatch *pgproto3.KwDataRowBatch
+	kwRow   int
 }
 
 // Result is the saved query response that is returned by calling Read on a ResultReader.
@@ -1450,6 +1453,16 @@ func (rr *ResultReader) Read() *Result {
 
 // NextRow advances the ResultReader to the next row and returns true if a row is available.
 func (rr *ResultReader) NextRow() bool {
+	if rr.kwBatch != nil {
+		if rr.kwRow < len(rr.kwBatch.ValuesTextRows) {
+			rr.rowValues = rr.kwBatch.ValuesTextRows[rr.kwRow]
+			rr.kwRow++
+			return true
+		}
+		rr.kwBatch = nil
+		rr.kwRow = 0
+	}
+
 	for !rr.commandConcluded {
 		msg, err := rr.receiveMessage()
 		if err != nil {
@@ -1460,9 +1473,14 @@ func (rr *ResultReader) NextRow() bool {
 		case *pgproto3.DataRow:
 			rr.rowValues = msg.Values
 			return true
+
+		case *pgproto3.KwDataRowBatch:
+			rr.kwBatch = msg
+			rr.kwRow = 1
+			rr.rowValues = msg.ValuesTextRows[0]
+			return true
 		}
 	}
-
 	return false
 }
 
