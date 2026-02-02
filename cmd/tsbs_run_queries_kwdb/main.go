@@ -114,12 +114,19 @@ func (p *processor) ProcessQuery(q query.Query, prepare bool) ([]*query.Stat, er
 
 	for i := 0; i < len(querys); i++ {
 		if !prepare {
-			fmt.Println(querys[i])
+			//fmt.Println(querys[i])
 			rows, err := p.db.Connection.Query(ctx, querys[i])
 			if err != nil {
 				log.Println("Error running query: '", querys[i], "'")
 				return nil, err
 			}
+			//for rows.Next() {
+			//	values, err := rows.Values()
+			//	if err != nil {
+			//		return nil, err
+			//	}
+			//	fmt.Println(values)
+			//}
 
 			rows.Close()
 		} else {
