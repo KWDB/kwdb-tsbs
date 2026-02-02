@@ -147,7 +147,6 @@ func fastParseInt(s string) (int64, bool) {
 	return int64(n), true
 }
 
-// 预计算的 10 的幂次方查找表，避免使用 math.Pow10
 var float64pow10 = [...]float64{
 	1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9,
 	1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16,
@@ -158,9 +157,6 @@ var (
 	nan = math.NaN()
 )
 
-// ParseFloatFast 快速解析浮点数字符串
-// 等效于 strconv.ParseFloat(s, 64)，但更快
-// 对于大多数常见情况使用快速路径，复杂情况回退到标准库
 func ParseFloatFast(s string) (float64, error) {
 	if len(s) == 0 {
 		return 0, fmt.Errorf("cannot parse float64 from empty string")
@@ -175,7 +171,6 @@ func ParseFloatFast(s string) (float64, error) {
 		}
 	}
 
-	// 处理 ".5" 这样的格式（整数部分省略）
 	if s[i] == '.' && (i+1 >= uint(len(s)) || s[i+1] < '0' || s[i+1] > '9') {
 		return 0, fmt.Errorf("missing integer and fractional part in %q", s)
 	}
@@ -183,7 +178,6 @@ func ParseFloatFast(s string) (float64, error) {
 	d := uint64(0)
 	j := i
 
-	// 解析整数部分
 	for i < uint(len(s)) {
 		if s[i] >= '0' && s[i] <= '9' {
 			d = d*10 + uint64(s[i]-'0')
@@ -201,7 +195,7 @@ func ParseFloatFast(s string) (float64, error) {
 		break
 	}
 
-	// 处理特殊值: inf, infinity, nan
+	// inf, infinity, nan
 	if i <= j && s[i] != '.' {
 		ss := s[i:]
 		if strings.HasPrefix(ss, "+") {
@@ -221,7 +215,6 @@ func ParseFloatFast(s string) (float64, error) {
 
 	f := float64(d)
 
-	// 快速路径 - 纯整数
 	if i >= uint(len(s)) {
 		if minus {
 			f = -f
@@ -229,11 +222,9 @@ func ParseFloatFast(s string) (float64, error) {
 		return f, nil
 	}
 
-	// 解析小数部分
 	if s[i] == '.' {
 		i++
 		if i >= uint(len(s)) {
-			// 小数部分可以省略，如 "123."
 			if minus {
 				f = -f
 			}
@@ -246,7 +237,6 @@ func ParseFloatFast(s string) (float64, error) {
 				d = d*10 + uint64(s[i]-'0')
 				i++
 				if i-j >= uint(len(float64pow10)) {
-					// 尾数超出范围，回退到标准解析
 					f, err := strconv.ParseFloat(s, 64)
 					if err != nil && !math.IsInf(f, 0) {
 						return 0, fmt.Errorf("cannot parse mantissa in %q: %s", s, err)
@@ -262,10 +252,8 @@ func ParseFloatFast(s string) (float64, error) {
 			return 0, fmt.Errorf("cannot find mantissa in %q", s)
 		}
 
-		// 一次性将整个尾数转换为浮点数，避免舍入误差
 		f = float64(d) / float64pow10[i-k]
 
-		// 快速路径 - 解析完成的小数
 		if i >= uint(len(s)) {
 			if minus {
 				f = -f
@@ -274,7 +262,6 @@ func ParseFloatFast(s string) (float64, error) {
 		}
 	}
 
-	// 解析指数部分 (e 或 E)
 	if s[i] == 'e' || s[i] == 'E' {
 		i++
 		if i >= uint(len(s)) {
@@ -297,7 +284,6 @@ func ParseFloatFast(s string) (float64, error) {
 				exp = exp*10 + int16(s[i]-'0')
 				i++
 				if exp > 300 {
-					// 指数可能超出 float64 范围，回退到标准解析
 					f, err := strconv.ParseFloat(s, 64)
 					if err != nil && !math.IsInf(f, 0) {
 						return 0, fmt.Errorf("cannot parse exponent in %q: %s", s, err)
@@ -439,25 +425,25 @@ func (p *prepareProcessoriot) parseDiagnosticsRow(s string, sLen int, tableBuffe
 			v := s[start:pos]
 
 			switch fieldIdx {
-			case 0: // 时间戳
+			case 0:
 				num, ok := fastParseInt(v)
 				if !ok {
 					num, _ = strconv.ParseInt(v, 10, 64)
 				}
 				tableBuffer.Emplace(uint64(num*1000) - microsecFromUnixEpochToY2K + 8*3600*1000000)
-			case 3: // status - 整数
+			case 3:
 				num, ok := fastParseInt(v)
 				if !ok {
 					num, _ = strconv.ParseInt(v, 10, 64)
 				}
 				tableBuffer.Emplace(uint64(num))
-			case 4: // name字段
+			case 4:
 				if q1 := strings.IndexByte(v, '\''); q1 >= 0 {
 					if q2 := strings.IndexByte(v[q1+1:], '\''); q2 >= 0 {
 						tableBuffer.Append([]byte(v[q1+1 : q1+1+q2]))
 					}
 				}
-			default: // 浮点数字段 (1, 2)
+			default:
 				num, err := ParseFloatFast(v)
 				if err != nil {
 					num, _ = strconv.ParseFloat(v, 64)
@@ -471,7 +457,6 @@ func (p *prepareProcessoriot) parseDiagnosticsRow(s string, sLen int, tableBuffe
 	}
 }
 
-// 根据 tableName 获取相应的 preparesize 值
 func getPreparesize(tableName string) int {
 	if strings.HasPrefix(tableName, "readings") {
 		return 9
