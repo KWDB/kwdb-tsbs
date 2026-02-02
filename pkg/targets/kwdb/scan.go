@@ -29,7 +29,7 @@ var casetype string
 
 func (i *indexer) GetIndex(item data.LoadedPoint) uint {
 	p := item.Data.(*point)
-	if p.sqlType != Insert {
+	if p.fieldCount == 11 && p.sqlType != Insert {
 		return 0
 	}
 
@@ -42,22 +42,18 @@ func (i *indexer) GetIndex(item data.LoadedPoint) uint {
 		}
 		return index
 	} else {
-		lastUnderscore := len(p.device) - 1
-		for lastUnderscore >= 0 && p.device[lastUnderscore] != '_' {
-			lastUnderscore--
+		l := len(p.device) - 1
+		for l >= 0 && p.device[l] >= '0' && p.device[l] <= '9' {
+			l--
 		}
 
 		var num int64
-		for i := lastUnderscore + 1; i < len(p.device); i++ {
-			num = num*10 + int64(p.device[i]-'0')
+		for j := l + 1; j < len(p.device); j++ {
+			num = num*10 + int64(p.device[j]-'0')
 		}
 
-		modVal := i.ChansLen / 2
+		modVal := i.ChansLen
 		index := int(num) % modVal
-		if p.fieldCount != 8 {
-			index += 6
-		}
-
 		return uint(index)
 	}
 }

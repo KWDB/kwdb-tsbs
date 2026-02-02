@@ -44,7 +44,10 @@ func (d *dbCreator) CreateDB(dbName string) error {
 	}
 
 	if d.opts.Case == "cpu-only" {
-		sql := fmt.Sprintf("create table %s.cpu (k_timestamp timestamp not null,usage_user bigint not null,usage_system bigint not null,usage_idle bigint not null,usage_nice bigint not null,usage_iowait bigint not null,usage_irq bigint not null,usage_softirq bigint not null,usage_steal bigint not null,usage_guest bigint not null,usage_guest_nice bigint not null) tags (hostname char(30) not null,region char(30),datacenter char(30),rack char(30),os char(30),arch char(30),team char(30),service char(30),service_version char(30),service_environment char(30)) primary tags(hostname)", dbName)
+		sql := fmt.Sprintf("create table %s.cpu (k_timestamp timestamp not null,usage_user bigint not null,usage_system bigint not null,usage_idle bigint not null,usage_nice bigint not null,"+
+			"usage_iowait bigint not null,usage_irq bigint not null,usage_softirq bigint not null,usage_steal bigint not null,usage_guest bigint not null,usage_guest_nice bigint not null) "+
+			"tags (hostname char(30) not null,region char(30),datacenter char(30),rack char(30),os char(30),arch char(30),team char(30),service char(30),"+
+			"service_version char(30),service_environment char(30)) primary tags(hostname)", dbName)
 		_, err = d.db.Connection.Exec(ctx, sql)
 		if err != nil && !strings.Contains(err.Error(), "already exists") {
 			panic(fmt.Sprintf("kwdb create table failed,err :%s", err))

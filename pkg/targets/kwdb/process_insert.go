@@ -214,7 +214,7 @@ func (p *processorInsert) ProcessBatch(b targets.Batch, doLoad bool) (metricCoun
 				} else { //means diagnostics
 					b2.WriteString(csvSQL)
 				}
-				cnt1++
+				cnt1 += len(sqls)
 			} else {
 				// wait for allTag data inserted
 				allTagC, allTagCancel := context.WithCancel(context.Background())
@@ -233,8 +233,7 @@ func (p *processorInsert) ProcessBatch(b targets.Batch, doLoad bool) (metricCoun
 				cnt2++
 			}
 		}
-
-		if cnt1+cnt2 == len(batches.m) {
+		if cnt1+cnt2 == int(batches.cnt) {
 			execSQL := func(sqlStr strings.Builder, expectedLen int, sqlType string) {
 				if sqlStr.Len() != expectedLen {
 					_, err := p._db.Connection.Exec(context.Background(), sqlStr.String())

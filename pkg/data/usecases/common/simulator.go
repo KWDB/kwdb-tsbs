@@ -1,9 +1,10 @@
 package common
 
 import (
-	"github.com/timescale/tsbs/pkg/data"
 	"reflect"
 	"time"
+
+	"github.com/timescale/tsbs/pkg/data"
 )
 
 // SimulatorConfig is an interface to create a Simulator from a time.Duration.
@@ -23,7 +24,7 @@ type BaseSimulatorConfig struct {
 	GeneratorScale uint64
 	// GeneratorConstructor is the function used to create a new Generator given an id number and start time
 	GeneratorConstructor func(i int, start time.Time) Generator
-
+	// Orderquantity is the batch size for generating data points
 	Orderquantity int
 }
 
@@ -38,12 +39,19 @@ func (sc *BaseSimulatorConfig) NewSimulator(interval time.Duration, limit uint64
 		generators[i] = sc.GeneratorConstructor(i, sc.Start)
 	}
 
+	measurementCount := len(generators[0].Measurements())
 	epochs := calculateEpochs(sc.End.Sub(sc.Start), interval)
-	maxPoints := epochs * sc.GeneratorScale * uint64(len(generators[0].Measurements()))
+	maxPoints := epochs * sc.GeneratorScale * uint64(measurementCount)
 	if limit > 0 && limit < maxPoints {
 		// Set specified points number limit
 		maxPoints = limit
 	}
+
+	orderquantity := sc.Orderquantity
+	if orderquantity <= 0 {
+		orderquantity = int(sc.InitGeneratorScale) // default to all generators
+	}
+
 	sim := &BaseSimulator{
 		madePoints: 0,
 		maxPoints:  maxPoints,
@@ -60,8 +68,10 @@ func (sc *BaseSimulatorConfig) NewSimulator(interval time.Duration, limit uint64
 		interval:        interval,
 
 		simulatedMeasurementIndex: 0,
-
-		Orderquantity: sc.Orderquantity,
+		measurementCount:          measurementCount,
+		orderquantity:             orderquantity,
+		batchStart:                0,
+		batchIndex:                0,
 	}
 
 	return sim
@@ -84,6 +94,11 @@ type Simulator interface {
 }
 
 // BaseSimulator generates data similar to truck readings.
+// Data generation order (Scenario B): each batch completes all time points before moving to next batch.
+// Example with Orderquantity=12, 24 devices, 3 time points:
+//
+//	t0 readings[0..11] -> t0 diagnostics[0..11] -> t1 readings[0..11] -> t1 diagnostics[0..11] -> ... -> t2 diagnostics[0..11]
+//	t0 readings[12..23] -> t0 diagnostics[12..23] -> t1 readings[12..23] -> ... -> t2 diagnostics[12..23]
 type BaseSimulator struct {
 	madePoints uint64
 	maxPoints  uint64
@@ -101,15 +116,12 @@ type BaseSimulator struct {
 	interval       time.Duration
 
 	simulatedMeasurementIndex int
+	measurementCount          int
+	timeindex                 int
 
-	Orderquantity int
-	orderindex    uint64
-	lastindex     uint64
-	timeindex     int
-	deviceindex   int
-	count         uint64
-	shouldProcess bool
-	cycleCheck    int
+	orderquantity int    // batch size for generating data points
+	batchStart    uint64 // start index of current batch
+	batchIndex    int    // current index within the batch
 }
 
 // Finished tells whether we have simulated all the necessary points.
@@ -118,73 +130,64 @@ func (s *BaseSimulator) Finished() bool {
 }
 
 // Next advances a Point to the next state in the generator.
+// Generation order (Scenario B): batch -> time -> measurement -> generator within batch
+// Each batch of Orderquantity generators completes all time points before moving to next batch.
 func (s *BaseSimulator) Next(p *data.Point) bool {
 	intervalCount := int(s.timestampEnd.Sub(s.timestampStart) / s.interval)
 
-	if s.cycleCheck+1 == intervalCount*2 {
-		s.orderindex = 0
+	// Calculate current generator index
+	s.generatorIndex = s.batchStart + uint64(s.batchIndex)
+
+	// Calculate effective batch size (may be smaller for last batch)
+	batchEnd := s.batchStart + uint64(s.orderquantity)
+	if batchEnd > s.epochGenerators {
+		batchEnd = s.epochGenerators
+	}
+	effectiveBatchSize := int(batchEnd - s.batchStart)
+
+	// Check if current batch within current measurement is complete
+	if s.batchIndex >= effectiveBatchSize {
+		s.batchIndex = 0
+		s.simulatedMeasurementIndex++
+
+		// Check if all measurements for current time point are complete
+		if s.simulatedMeasurementIndex >= s.measurementCount {
+			s.simulatedMeasurementIndex = 0
+
+			// Advance time for current batch of generators only
+			for i := s.batchStart; i < batchEnd; i++ {
+				s.generators[i].TickAll(s.interval)
+			}
+			s.timeindex++
+
+			// Check if all time points for current batch are complete
+			if s.timeindex >= intervalCount {
+				s.timeindex = 0
+				s.batchStart += uint64(s.orderquantity)
+			}
+		}
+		// Recalculate generator index after state changes
+		s.generatorIndex = s.batchStart + uint64(s.batchIndex)
 	}
 
-	if s.generatorIndex != 0 && s.generatorIndex%uint64(s.Orderquantity/2) == 0 ||
-		s.generatorIndex == s.initGenerators {
-		s.orderindex++
-		if s.simulatedMeasurementIndex == 0 {
-			s.generatorIndex = s.lastindex
-			s.simulatedMeasurementIndex++
-		} else {
-			s.simulatedMeasurementIndex--
-		}
-		s.cycleCheck++
-	}
-
-	if s.generatorIndex%uint64(s.Orderquantity/2) != 0 && s.orderindex != 0 &&
-		s.orderindex%2 == 0 && s.timeindex < intervalCount {
-		s.simulatedMeasurementIndex, s.generatorIndex = 0, s.lastindex
-		end := uint64(s.Orderquantity/2) + s.lastindex
-		if end > s.initGenerators {
-			end = s.initGenerators
-		}
-		for i := s.lastindex; i < end; i++ {
-			s.generators[i].TickAll(s.interval)
-		}
-		s.timeindex++
-		s.orderindex = 0
-		s.shouldProcess = true
-		s.adjustNumHostsForEpoch()
-	}
-
-	if int(s.generatorIndex) >= len(s.generators) {
+	// Check if simulation is complete (all batches processed)
+	if s.batchStart >= s.epochGenerators {
 		s.madePoints = s.maxPoints
 		return false
 	}
+
+	// Generate current data point
 	generator := s.generators[s.generatorIndex]
-	// Populate the Generator tags.
+	// Populate the Generator tags
 	for _, tag := range generator.Tags() {
 		p.AppendTag(tag.Key, tag.Value)
 	}
-	// Populate measurement-specific tags and fields:
+	// Populate measurement-specific tags and fields
 	generator.Measurements()[s.simulatedMeasurementIndex].ToPoint(p)
-	if s.shouldProcess && s.timeindex != 0 && intervalCount >= s.timeindex {
-		if s.timeindex == intervalCount {
-			s.count++
-		} else {
-			s.generatorIndex = s.lastindex
-		}
-		s.lastindex = s.generatorIndex
-		s.shouldProcess = false
-	}
 
-	if s.timeindex == intervalCount && s.simulatedMeasurementIndex == 1 &&
-		int(s.generatorIndex+1)%(s.Orderquantity/2) == 0 {
-		s.generatorIndex = uint64(s.Orderquantity/2)*s.count - 1
-		s.lastindex = s.generatorIndex + 1
-		s.timeindex, s.deviceindex, s.orderindex = 0, 0, 0
-	}
-
-	ret := s.generatorIndex < s.epochGenerators
 	s.madePoints++
-	s.generatorIndex++
-	return ret
+	s.batchIndex++
+	return true
 }
 
 // Fields returns all the simulated measurements for the device.
