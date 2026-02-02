@@ -1414,6 +1414,10 @@ type ResultReader struct {
 	commandConcluded  bool
 	closed            bool
 	err               error
+
+	kwBatch   *pgproto3.KwDataRowBatch
+	kwColOIDs []uint32
+	kwRow     int
 }
 
 // Result is the saved query response that is returned by calling Read on a ResultReader.
@@ -1450,6 +1454,16 @@ func (rr *ResultReader) Read() *Result {
 
 // NextRow advances the ResultReader to the next row and returns true if a row is available.
 func (rr *ResultReader) NextRow() bool {
+	if rr.kwBatch != nil {
+		if rr.kwRow < len(rr.kwBatch.ValuesTextRows) {
+			rr.rowValues = rr.kwBatch.ValuesTextRows[rr.kwRow]
+			rr.kwRow++
+			return true
+		}
+		rr.kwBatch = nil
+		rr.kwRow = 0
+	}
+
 	for !rr.commandConcluded {
 		msg, err := rr.receiveMessage()
 		if err != nil {
@@ -1460,9 +1474,14 @@ func (rr *ResultReader) NextRow() bool {
 		case *pgproto3.DataRow:
 			rr.rowValues = msg.Values
 			return true
+
+		case *pgproto3.KwDataRowBatch:
+			rr.kwBatch = msg
+			rr.kwRow = 1
+			rr.rowValues = msg.ValuesTextRows[0]
+			return true
 		}
 	}
-
 	return false
 }
 
@@ -1556,6 +1575,16 @@ func (rr *ResultReader) receiveMessage() (msg pgproto3.BackendMessage, err error
 
 	switch msg := msg.(type) {
 	case *pgproto3.RowDescription:
+		n := len(msg.Fields)
+		if cap(rr.kwColOIDs) < n {
+			rr.kwColOIDs = make([]uint32, n)
+		} else {
+			rr.kwColOIDs = rr.kwColOIDs[:n]
+		}
+		for i := 0; i < n; i++ {
+			rr.kwColOIDs[i] = msg.Fields[i].DataTypeOID
+		}
+
 		rr.fieldDescriptions = rr.pgConn.convertRowDescription(rr.pgConn.fieldDescriptions[:], msg)
 	case *pgproto3.CommandComplete:
 		rr.concludeCommand(rr.pgConn.makeCommandTag(msg.CommandTag), nil)
@@ -2009,4 +2038,32 @@ func (p *Pipeline) Close() error {
 	p.conn.unlock()
 
 	return p.err
+}
+
+type kwRowChunk struct {
+	// from message header
+	rowNum int
+	colNum int
+
+	storageLen     []int32
+	colBlockOffset []int32
+
+	compressionType int16
+	payload         []byte
+
+	cur int // next row index to emit
+}
+
+func (c *kwRowChunk) ResetFromMsg(m *pgproto3.KwDataRowBatch) {
+	c.rowNum = int(m.RowNum)
+	c.colNum = int(m.ColNum)
+	c.storageLen = m.StorageLen
+	c.colBlockOffset = m.ColBlockOffset
+	c.compressionType = m.CompressionType
+	c.payload = m.Payload
+	c.cur = 0
+}
+
+func (c *kwRowChunk) HasNext() bool {
+	return c.cur < c.rowNum && c.rowNum > 0 && c.colNum > 0
 }
