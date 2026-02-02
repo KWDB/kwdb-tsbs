@@ -183,7 +183,6 @@ func ParseFloatFast(s string) (float64, error) {
 			d = d*10 + uint64(s[i]-'0')
 			i++
 			if i > 18 {
-				// 整数部分可能超出 uint64 范围，回退到标准解析
 				f, err := strconv.ParseFloat(s, 64)
 				if err != nil && !math.IsInf(f, 0) {
 					return 0, err
@@ -375,7 +374,6 @@ func (p *prepareProcessoriot) ProcessBatch(b targets.Batch, doLoad bool) (metric
 		}
 	}
 
-	// batches.Reset()
 	return metricCnt, rowCnt
 }
 
@@ -389,19 +387,19 @@ func (p *prepareProcessoriot) parseReadingsRow(s string, sLen int, tableBuffer *
 			v := s[start:pos]
 
 			switch fieldIdx {
-			case 0: // 时间戳
+			case 0:
 				num, ok := fastParseInt(v)
 				if !ok {
 					num, _ = strconv.ParseInt(v, 10, 64)
 				}
 				tableBuffer.Emplace(uint64(num*1000) - microsecFromUnixEpochToY2K + 8*3600*1000000)
-			case 8: // name字段
+			case 8:
 				if q1 := strings.IndexByte(v, '\''); q1 >= 0 {
 					if q2 := strings.IndexByte(v[q1+1:], '\''); q2 >= 0 {
 						tableBuffer.Append([]byte(v[q1+1 : q1+1+q2]))
 					}
 				}
-			default: // 浮点数字段
+			default:
 				num, err := ParseFloatFast(v)
 				if err != nil {
 					num, _ = strconv.ParseFloat(v, 64)
