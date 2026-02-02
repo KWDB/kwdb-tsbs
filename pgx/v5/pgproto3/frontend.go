@@ -314,7 +314,6 @@ func (f *Frontend) Receive() (BackendMessage, error) {
 	case 'M':
 		f.kwDataRowBatch.ColOIDs = f.kwColOIDs
 		msg = &f.kwDataRowBatch
-		fmt.Println("M")
 
 	default:
 		return nil, fmt.Errorf("unknown message type: %c", f.msgType)
