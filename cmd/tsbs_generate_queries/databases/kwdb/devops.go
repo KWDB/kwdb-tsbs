@@ -219,7 +219,7 @@ func (d *Devops) LastPointPerHost(qi query.Query) {
 	}
 	var sql string
 	if !prepare {
-		sql = fmt.Sprintf(`SELECT hostname, last_row(k_timestamp) %s FROM %s.cpu GROUP BY hostname`,
+		sql = fmt.Sprintf(`SELECT hostname, last_row(k_timestamp), %s FROM %s.cpu GROUP BY hostname`,
 			strings.Join(selectClauses, ", "),
 			d.CPUDBName)
 	} else {
@@ -250,7 +250,6 @@ func (d *Devops) HighCPUForHosts(qi query.Query, nHosts int) {
 		panicIfErr(err)
 		if !prepare {
 			sql = fmt.Sprintf(`SELECT k_timestamp,usage_user,usage_system,usage_idle,usage_nice,usage_iowait,usage_irq,usage_softirq,usage_steal,usage_guest,usage_guest_nice FROM %s.cpu WHERE hostname='%s' AND usage_user > 90.0 AND k_timestamp >= '%s' AND k_timestamp < '%s'`,
-				d.CPUDBName,
 				d.CPUDBName,
 				hostnames[0],
 				parseTime(time.UnixMilli(interval.StartUnixMillis()).UTC()),
