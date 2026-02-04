@@ -4,10 +4,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"math"
-	"strconv"
-	"time"
-
 	"github.com/golang/snappy"
 	"github.com/pierrec/lz4"
 )
@@ -210,37 +206,37 @@ func kwCellToText(oid uint32, cell []byte) ([]byte, error) {
 		if len(cell) < 8 {
 			return nil, fmt.Errorf("ts cell too short %d", len(cell))
 		}
-		v := int64(binary.LittleEndian.Uint64(cell[:8]))
-		t := time.Unix(0, v*int64(time.Millisecond)).UTC()
-		return []byte(t.Format("2006-01-01 00:00:00+00:00")), nil
+		//v := int64(binary.LittleEndian.Uint64(cell[:8]))
+		//t := time.Unix(0, v*int64(time.Millisecond)).UTC()
+		return cell[:8], nil
 
 	case 701: // float8
 		if len(cell) < 8 {
 			return nil, fmt.Errorf("float8 cell too short %d", len(cell))
 		}
-		f := math.Float64frombits(binary.LittleEndian.Uint64(cell[:8]))
-		return []byte(strconv.FormatFloat(f, 'g', -1, 64)), nil
+		//f := math.Float64frombits(binary.LittleEndian.Uint64(cell[:8]))
+		return cell[:8], nil
 
 	case 700: // float4
 		if len(cell) < 4 {
 			return nil, fmt.Errorf("float4 cell too short %d", len(cell))
 		}
-		f := math.Float32frombits(binary.LittleEndian.Uint32(cell[:4]))
-		return []byte(strconv.FormatFloat(float64(f), 'g', -1, 32)), nil
+		//f := math.Float32frombits(binary.LittleEndian.Uint32(cell[:4]))
+		return cell[:4], nil
 
 	case 20: // int8
 		if len(cell) < 8 {
 			return nil, fmt.Errorf("int8 cell too short %d", len(cell))
 		}
-		v := int64(binary.LittleEndian.Uint64(cell[:8]))
-		return []byte(strconv.FormatInt(v, 10)), nil
+		//v := int64(binary.LittleEndian.Uint64(cell[:8]))
+		return cell[:8], nil
 
 	case 23: // int4
 		if len(cell) < 4 {
 			return nil, fmt.Errorf("int4 cell too short %d", len(cell))
 		}
-		v := int64(int32(binary.LittleEndian.Uint32(cell[:4])))
-		return []byte(strconv.FormatInt(v, 10)), nil
+		//v := int64(int32(binary.LittleEndian.Uint32(cell[:4])))
+		return cell[:4], nil
 
 	case 25, 1043, 1042: // text/varchar/bpchar
 		if len(cell) < 2 {
