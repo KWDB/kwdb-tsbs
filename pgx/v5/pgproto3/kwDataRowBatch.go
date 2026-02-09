@@ -113,7 +113,8 @@ func (m *KwDataRowBatch) Decode(src []byte) error {
 			for r := 0; r < rowNum; r++ {
 				start := off + r*sl
 				end := start + sl
-				raw := payload[start:end]
+				raw := make([]byte, sl)
+				copy(raw, payload[start:end])
 
 				txt, err := kwCellToText(oid, raw)
 				if err != nil {
