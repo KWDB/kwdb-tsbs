@@ -52,6 +52,7 @@ type Frontend struct {
 	rowDescription                  RowDescription
 	portalSuspended                 PortalSuspended
 	aEParameter                     AEParameter
+	parameterDescriptionEx          ParameterDescriptionEx
 
 	bodyLen    int
 	msgType    byte
@@ -132,6 +133,14 @@ func (f *Frontend) SendBind(msg *Bind) {
 	}
 }
 
+func (f *Frontend) SendBindEx(msg *BindEx) {
+	prevLen := len(f.wbuf)
+	f.wbuf = msg.Encode(f.wbuf)
+	if f.tracer != nil {
+		f.tracer.traceBindEx('F', int32(len(f.wbuf)-prevLen), msg)
+	}
+}
+
 // SendParse sends a Parse message to the backend (i.e. the server). The message is not guaranteed to be written until
 // Flush is called.
 func (f *Frontend) SendParse(msg *Parse) {
@@ -139,6 +148,14 @@ func (f *Frontend) SendParse(msg *Parse) {
 	f.wbuf = msg.Encode(f.wbuf)
 	if f.tracer != nil {
 		f.tracer.traceParse('F', int32(len(f.wbuf)-prevLen), msg)
+	}
+}
+
+func (f *Frontend) SendParseEx(msg *ParseEx) {
+	prevLen := len(f.wbuf)
+	f.wbuf = msg.Encode(f.wbuf)
+	if f.tracer != nil {
+		f.tracer.traceParseEx('F', int32(len(f.wbuf)-prevLen), msg)
 	}
 }
 
@@ -309,6 +326,8 @@ func (f *Frontend) Receive() (BackendMessage, error) {
 		msg = &f.copyBothResponse
 	case 'Z':
 		msg = &f.readyForQuery
+	case 'X':
+		msg = &f.parameterDescriptionEx
 	default:
 		return nil, fmt.Errorf("unknown message type: %c", f.msgType)
 	}

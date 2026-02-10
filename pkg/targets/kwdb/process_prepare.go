@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"github.com/jackc/pgx/v5/pgconn"
 	"strconv"
 	"strings"
 
@@ -70,6 +71,8 @@ type prepareProcessor struct {
 	buffer     map[string]*fixedArgList // tableName, fixedArgList
 	buffInited bool
 	formatBuf  []int16
+
+	sd *pgconn.StatementDescription
 }
 
 func newProcessorPrepare(opts *LoadingOptions, dbName string) *prepareProcessor {
@@ -178,6 +181,15 @@ func (p *prepareProcessor) ProcessBatch(b targets.Batch, doLoad bool) (metricCou
 				}
 			}
 
+			/*if p.sd != nil && p.sd.ParamOIDs != nil {
+				nvalCount := len(values)
+				rowNeedCount := len(p.sd.ParamOIDs)
+				for ; rowNeedCount > nvalCount; nvalCount++ {
+					// fill nill other tag for cpu all field
+					tableBuffer.Append(nil)
+				}
+			}*/
+
 			// check buffer is full
 			if tableBuffer.Length() == tableBuffer.Capacity() {
 				// init prepareStmt
@@ -185,9 +197,18 @@ func (p *prepareProcessor) ProcessBatch(b targets.Batch, doLoad bool) (metricCou
 				if !ok {
 					p.createPrepareSql("cpu")
 					p.preparedSql["cpu"] = struct{}{}
+					/*if p.sd != nil && p.sd.ParamOIDs != nil {
+						nvalCount := len(values)
+						rowNeedCount := len(p.sd.ParamOIDs)
+						for ; rowNeedCount > nvalCount; nvalCount++ {
+							// fill nill other tag for cpu all field
+							tableBuffer.Append(nil)
+						}
+					}*/
 				}
 
-				p.execPrepareStmt("cpu", tableBuffer.args)
+				//p.execPrepareStmt("cpu", tableBuffer.args)
+				p.execPrepareStmtEx("cpu", tableBuffer.args, 12)
 				// reuse buffer: reset tableBuffer's write position
 				tableBuffer.Reset()
 			}
@@ -251,7 +272,9 @@ func (p *prepareProcessor) createPrepareSql(deviecName string) {
 	query := fmt.Sprintf("insert into %s.cpu (k_timestamp,usage_user,usage_system,usage_idle,usage_nice,usage_iowait,usage_irq,usage_softirq,usage_steal,usage_guest,usage_guest_nice,hostname) values ", p.opts.DBName)
 	insertsql.WriteString(query)
 	sql := insertsql.String() + p.prepareStmt.String()
-	_, err1 := p._db.Connection.Prepare(context.Background(), "insertall"+deviecName, sql)
+	// _, err1 := p._db.Connection.Prepare(context.Background(), "insertall"+deviecName, sql)
+	var err1 error
+	p.sd, err1 = p._db.Connection.PrepareEx(context.Background(), "insertall"+deviecName, "benchmark.public.cpu")
 	if err1 != nil {
 		panic(fmt.Sprintf("kwdb Prepare failed,err :%s, sql :%s", err1, sql))
 	}
@@ -259,6 +282,13 @@ func (p *prepareProcessor) createPrepareSql(deviecName string) {
 
 func (p *prepareProcessor) execPrepareStmt(tableName string, args [][]byte) {
 	res := p._db.Connection.PgConn().ExecPrepared(context.Background(), "insertall"+tableName, args, p.formatBuf, []int16{}).Read()
+	if res.Err != nil {
+		panic(res.Err)
+	}
+}
+
+func (p *prepareProcessor) execPrepareStmtEx(tableName string, args [][]byte, colCountPerRow int) {
+	res := p._db.Connection.PgConn().ExecPreparedEx(context.Background(), "insertall"+tableName, p.sd, args, colCountPerRow).Read()
 	if res.Err != nil {
 		panic(res.Err)
 	}

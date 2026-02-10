@@ -191,6 +191,11 @@ func (t *tracer) traceBind(sender byte, encodedLen int32, msg *Bind) {
 	t.finishTrace()
 }
 
+func (t *tracer) traceBindEx(sender byte, encodedLen int32, msg *BindEx) {
+	t.beginTrace(sender, encodedLen, "BindEx")
+	t.finishTrace()
+}
+
 func (t *tracer) traceBindComplete(sender byte, encodedLen int32, msg *BindComplete) {
 	t.beginTrace(sender, encodedLen, "BindComplete")
 	t.finishTrace()
@@ -336,6 +341,12 @@ func (t *tracer) traceParse(sender byte, encodedLen int32, msg *Parse) {
 	for _, oid := range msg.ParameterOIDs {
 		fmt.Fprintf(t.buf, " %d", oid)
 	}
+	t.finishTrace()
+}
+
+func (t *tracer) traceParseEx(sender byte, encodedLen int32, msg *ParseEx) {
+	t.beginTrace(sender, encodedLen, "Parse")
+	fmt.Fprintf(t.buf, "\t %s %s", traceDoubleQuotedString([]byte(msg.Name)), traceDoubleQuotedString([]byte(msg.TableName)))
 	t.finishTrace()
 }
 

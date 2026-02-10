@@ -329,6 +329,42 @@ func (c *Conn) Prepare(ctx context.Context, name, sql string) (sd *pgconn.Statem
 	return sd, nil
 }
 
+func (c *Conn) PrepareEx(ctx context.Context, name, sql string) (sd *pgconn.StatementDescription, err error) {
+	if c.prepareTracer != nil {
+		ctx = c.prepareTracer.TracePrepareStart(ctx, c, TracePrepareStartData{Name: name, SQL: sql})
+	}
+
+	if name != "" {
+		var ok bool
+		if sd, ok = c.preparedStatements[name]; ok {
+			if sd.SQL == sql {
+				if c.prepareTracer != nil {
+					c.prepareTracer.TracePrepareEnd(ctx, c, TracePrepareEndData{AlreadyPrepared: true})
+				}
+				return sd, nil
+			}
+			panic(fmt.Sprintf("prepare le repeat table %s", name))
+		}
+	}
+
+	if c.prepareTracer != nil {
+		defer func() {
+			c.prepareTracer.TracePrepareEnd(ctx, c, TracePrepareEndData{Err: err})
+		}()
+	}
+
+	sd, err = c.pgConn.PrepareEx(ctx, name, sql)
+	if err != nil {
+		return nil, err
+	}
+
+	if name != "" {
+		c.preparedStatements[name] = sd
+	}
+
+	return sd, nil
+}
+
 // Deallocate released a prepared statement
 func (c *Conn) Deallocate(ctx context.Context, name string) error {
 	delete(c.preparedStatements, name)

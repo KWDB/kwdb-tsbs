@@ -86,3 +86,62 @@ func (src Parse) MarshalJSON() ([]byte, error) {
 		ParameterOIDs: src.ParameterOIDs,
 	})
 }
+
+type ParseEx struct {
+	Name      string
+	TableName string
+}
+
+// Frontend identifies this message as sendable by a PostgreSQL frontend.
+func (*ParseEx) Frontend() {}
+
+// Decode decodes src into dst. src must contain the complete message with the exception of the initial 1 byte message
+// type identifier and 4 byte message length.
+func (dst *ParseEx) Decode(src []byte) error {
+	*dst = ParseEx{}
+
+	buf := bytes.NewBuffer(src)
+
+	b, err := buf.ReadBytes(0)
+	if err != nil {
+		return err
+	}
+	dst.Name = string(b[:len(b)-1])
+
+	b, err = buf.ReadBytes(0)
+	if err != nil {
+		return err
+	}
+	dst.TableName = string(b[:len(b)-1])
+
+	return nil
+}
+
+// Encode encodes src into dst. dst will include the 1 byte message type identifier and the 4 byte message length.
+func (src *ParseEx) Encode(dst []byte) []byte {
+	dst = append(dst, 'R')
+	sp := len(dst)
+	dst = pgio.AppendInt32(dst, -1)
+
+	dst = append(dst, src.Name...)
+	dst = append(dst, 0)
+	dst = append(dst, src.TableName...)
+	dst = append(dst, 0)
+
+	pgio.SetInt32(dst[sp:], int32(len(dst[sp:])))
+
+	return dst
+}
+
+// MarshalJSON implements encoding/json.Marshaler.
+func (src ParseEx) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Type      string
+		Name      string
+		TableName string
+	}{
+		Type:      "Parse",
+		Name:      src.Name,
+		TableName: src.TableName,
+	})
+}
