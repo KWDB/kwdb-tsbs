@@ -4,21 +4,130 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+
 	"github.com/golang/snappy"
 	"github.com/pierrec/lz4"
 )
 
+//
+// The src argument (message body) has the following format (BigEndian):
+//
+// | Field             | Type    | Size (Bytes)    | Description                                      |
+// |-------------------|---------|-----------------|--------------------------------------------------|
+// | RowNum            | int32   | 4               | Number of rows in the batch                      |
+// | ColNum            | int16   | 2               | Number of columns                                |
+// | RowSize           | int32   | 4               | Size of a row                                    |
+// | Column Metadata   | Array   | ColNum * 8      | Repeated for each column (StorageLen + Offset)   |
+// | Capacity          | int32   | 4               | Batch capacity                                   |
+// | CompressionType   | int16   | 2               | 2=Uncompressed, 3/4=Compressed                   |
+// | Payload           | []byte  | Variable        | Data bytes (structure depends on CompressionType)|
+//
+// Column Metadata Structure (Repeated ColNum times):
+// | Field             | Type    | Size (Bytes)    | Description                                      |
+// |-------------------|---------|-----------------|--------------------------------------------------|
+// | StorageLen        | int32   | 4               | Data length per cell for this column             |
+// | ColBlockOffset    | int32   | 4               | Offset in Payload for this column's data         |
+//
+// Payload Structure (CompressionType == 3 or 4):
+// Sequence of compressed blocks for each column.
+//
+// | Field             | Type    | Size (Bytes)    | Description                                      |
+// |-------------------|---------|-----------------|--------------------------------------------------|
+// | UncompressedSize  | int32   | 4               | Size of data after decompression                 |
+// | CompressedSize    | int32   | 4               | Size of the following compressed data            |
+// | CompressedData    | []byte  | CompressedSize  | The actual compressed data                       |
+//
+// Message Body Layout Diagram:
+//
+// +-----------------------------------------------------------------------+
+// | RowNum (4 bytes)   | ColNum (2 bytes)     | RowSize (4 bytes)         |
+// +-----------------------------------------------------------------------+
+// |                    Column Metadata (ColNum * 8 bytes)                 |
+// | +---------------------------+---------------------------+-----------+ |
+// | | Col 0: StorageLen (4B)    | Col 0: BlockOffset (4B)   |           | |
+// | +---------------------------+---------------------------+    ...    | |
+// | | Col N: StorageLen (4B)    | Col N: BlockOffset (4B)   |           | |
+// | +---------------------------+---------------------------+-----------+ |
+// +-----------------------------------------------------------------------+
+// | Capacity (4 bytes)          | CompressionType (2 bytes)               |
+// +-----------------------------------------------------------------------+
+// |                               Payload                                 |
+// | +-------------------------------------------------------------------+ |
+// | | If CompressionType == 2 (Uncompressed):                           | |
+// | |   [Raw Data Bytes for Col 0, Row 0..M]                            | |
+// | |   ...                                                             | |
+// | |   [Raw Data Bytes for Col N, Row 0..M]                            | |
+// | +-------------------------------------------------------------------+ |
+// | | If CompressionType == 3 or 4 (Compressed):                        | |
+// | |   +-----------------------------------------------------------+   | |
+// | |   | Col 0 Block:                                              |   | |
+// | |   |   UncompressedSize (4B) | CompressedSize (4B)             |   | |
+// | |   |   [Compressed Data ... (CompressedSize bytes)]            |   | |
+// | |   +-----------------------------------------------------------+   | |
+// | |   ...                                                             | |
+// | |   +-----------------------------------------------------------+   | |
+// | |   | Col N Block:                                              |   | |
+// | |   |   UncompressedSize (4B) | CompressedSize (4B)             |   | |
+// | |   |   [Compressed Data ... (CompressedSize bytes)]            |   | |
+// | |   +-----------------------------------------------------------+   | |
+// | +-------------------------------------------------------------------+ |
+// +-----------------------------------------------------------------------+
+
+// DataRowBatch represents a batch of data rows in a column-oriented format.
+const (
+	sizeRowNum  = 4
+	sizeColNum  = 2
+	sizeRowSize = 4
+
+	minMsgBodyLen = sizeRowNum + sizeColNum + sizeRowSize
+
+	sizeStorageLen     = 4
+	sizeColBlockOffset = 4
+	sizeColumnMetadata = 8
+
+	sizeCapacity        = 4
+	sizeCompressionType = 2
+
+	sizeUncompressed        = 4
+	sizeCompressed          = 4
+	sizeCompressedBlockHead = sizeUncompressed + sizeCompressed
+)
+
+// Compression type constants.
+const (
+	CompressionTypeNone   int16 = 2
+	CompressionTypeSnappy int16 = 3
+	CompressionTypeLZ4    int16 = 4
+)
+
+// Column count upper bound.
+const maxColumns = 4096
+
+// PostgreSQL OID constants for supported types.
+const (
+	oidTimestampTZ uint32 = 1184
+	oidTimestamp   uint32 = 1114
+	oidDate        uint32 = 1082
+	oidFloat8      uint32 = 701
+	oidFloat4      uint32 = 700
+	oidInt8        uint32 = 20
+	oidInt4        uint32 = 23
+	oidText        uint32 = 25
+	oidVarchar     uint32 = 1043
+	oidBpchar      uint32 = 1042
+)
+
+// KwDataRowBatch represents a batch of data rows in a column-oriented format.
 type KwDataRowBatch struct {
-	RowNum          int32
-	ColNum          int16
-	RowSize         int32
-	StorageLen      []int32
-	ColBlockOffset  []int32
-	Capacity        int32
+	RowNum          uint32
+	ColNum          uint16
+	RowSize         uint32
+	StorageLen      []uint32
+	ColBlockOffset  []uint32
+	Capacity        uint32
 	CompressionType int16
 	Payload         []byte // raw data region (may be compressed per your protocol)
 
-	Values         [][]byte
 	ColOIDs        []uint32
 	ValuesTextRows [][][]byte
 
@@ -32,166 +141,190 @@ func (*KwDataRowBatch) Backend() {}
 
 // Decode parses the message body (without the type byte and length).
 func (m *KwDataRowBatch) Decode(src []byte) error {
-
-	if len(src) < 4+2+4 {
-		return fmt.Errorf("KwDataRowBatch: invalid body length %d (<10)", len(src))
-	}
-	rp := 0
-
-	m.RowNum = int32(binary.BigEndian.Uint32(src[rp:]))
-	rp += 4
-
-	m.ColNum = int16(binary.BigEndian.Uint16(src[rp:]))
-	rp += 2
-
-	m.RowSize = int32(binary.BigEndian.Uint32(src[rp:]))
-	rp += 4
-
-	rowNum := int(m.RowNum)
-	colNum := int(m.ColNum)
-	if rowNum < 0 {
-		return fmt.Errorf("KwDataRowBatch: invalid rowNum %d", m.RowNum)
-	}
-	if colNum <= 0 || colNum > 4096 {
-		return fmt.Errorf("KwDataRowBatch: invalid colNum %d", m.ColNum)
+	rowNum, colNum, err := m.decodeMeta(src)
+	if err != nil {
+		return err
 	}
 
-	needMeta := colNum * (4 + 4)
-	if rp+needMeta+4+2 > len(src) {
-		return fmt.Errorf("KwDataRowBatch: body too short for meta (len=%d rp=%d)", len(src), rp)
+	switch m.CompressionType {
+	case CompressionTypeNone:
+		return m.decodeUncompressed(rowNum, colNum)
+	case CompressionTypeSnappy, CompressionTypeLZ4:
+		return m.decodeCompressed(rowNum, colNum)
+	default:
+		return fmt.Errorf("KwDataRowBatch: unknown compression type %d", m.CompressionType)
+	}
+}
+
+// Decode parses the message body (without the type byte and length).
+func (m *KwDataRowBatch) decodeMeta(src []byte) (rowNum, colNum int, err error) {
+	msglen := len(src)
+
+	if msglen < minMsgBodyLen {
+		return 0, 0, fmt.Errorf("KwDataRowBatch: invalid body length %d (<10)", msglen)
+	}
+
+	m.RowNum = binary.BigEndian.Uint32(src)
+	m.ColNum = binary.BigEndian.Uint16(src[sizeRowNum:])
+	m.RowSize = binary.BigEndian.Uint32(src[sizeRowNum+sizeColNum:])
+
+	if m.RowNum == 0 {
+		return 0, 0, fmt.Errorf("KwDataRowBatch: invalid rowNum %d", m.RowNum)
+	}
+
+	if m.ColNum == 0 || m.ColNum > maxColumns {
+		return 0, 0, fmt.Errorf("KwDataRowBatch: invalid colNum %d", m.ColNum)
+	}
+
+	rowNum = int(m.RowNum)
+	colNum = int(m.ColNum)
+
+	requiredMetadataLen := minMsgBodyLen + colNum*sizeColumnMetadata
+	if requiredMetadataLen > msglen {
+		return 0, 0, fmt.Errorf("KwDataRowBatch: body too short for %d meta (len=%d)", m.ColNum, msglen)
 	}
 
 	if cap(m.StorageLen) < colNum {
-		m.StorageLen = make([]int32, colNum)
-		m.ColBlockOffset = make([]int32, colNum)
+		m.StorageLen = make([]uint32, colNum)
+		m.ColBlockOffset = make([]uint32, colNum)
 	} else {
 		m.StorageLen = m.StorageLen[:colNum]
 		m.ColBlockOffset = m.ColBlockOffset[:colNum]
 	}
 
-	// diff: (storageLen, colBlockOffset) per column, interleaved
+	// Parse column metadata
+	rp := minMsgBodyLen
 	for i := 0; i < colNum; i++ {
-		m.StorageLen[i] = int32(binary.BigEndian.Uint32(src[rp:]))
-		rp += 4
-		m.ColBlockOffset[i] = int32(binary.BigEndian.Uint32(src[rp:]))
-		rp += 4
+		m.StorageLen[i] = binary.BigEndian.Uint32(src[rp:])
+		m.ColBlockOffset[i] = binary.BigEndian.Uint32(src[rp+sizeStorageLen:])
+		rp += sizeColumnMetadata
 	}
 
-	m.Capacity = int32(binary.BigEndian.Uint32(src[rp:]))
-	rp += 4
+	m.Capacity = binary.BigEndian.Uint32(src[rp:])
+	rp += sizeCapacity
 
 	m.CompressionType = int16(binary.BigEndian.Uint16(src[rp:]))
-	rp += 2
+	rp += sizeCompressionType
 
-	// payload
-	m.Payload = src[rp:]
-
-	if m.CompressionType == 2 {
-		rowNum := int(m.RowNum)
-		colNum := int(m.ColNum)
-
-		if len(m.ColOIDs) != colNum {
-			return fmt.Errorf("KwDataRowBatch: ColOIDs missing: have %d want %d", len(m.ColOIDs), colNum)
-		}
-
-		payload := m.Payload
-		m.ValuesTextRows = make([][][]byte, rowNum)
-		for r := 0; r < rowNum; r++ {
-			m.ValuesTextRows[r] = make([][]byte, colNum)
-		}
-
-		for c := 0; c < colNum; c++ {
-			sl := int(m.StorageLen[c])
-			off := int(m.ColBlockOffset[c])
-			needEnd := off + rowNum*sl
-			if sl < 0 || off < 0 || needEnd > len(payload) {
-				return fmt.Errorf("KwDataRowBatch: payload range invalid col=%d sl=%d off=%d needEnd=%d payload=%d",
-					c, sl, off, needEnd, len(payload))
-			}
-
-			oid := m.ColOIDs[c]
-			for r := 0; r < rowNum; r++ {
-				start := off + r*sl
-				end := start + sl
-				raw := make([]byte, sl)
-				copy(raw, payload[start:end])
-
-				txt, err := kwCellToText(oid, raw)
-				if err != nil {
-					return err
-				}
-				m.ValuesTextRows[r][c] = txt
-			}
-		}
-	} else if m.CompressionType == 4 || m.CompressionType == 3 {
-
-		m.ValuesTextRows = make([][][]byte, rowNum)
-		for r := 0; r < rowNum; r++ {
-			m.ValuesTextRows[r] = make([][]byte, colNum)
-		}
-		payload := m.Payload
-		offset := 0
-
-		for col := 0; col < colNum; col++ {
-			if len(payload) < 8 {
-				return fmt.Errorf("KwDataRowBatch: payload too short for compression header at col=%d", col)
-			}
-
-			uncompressedSize := int32(binary.BigEndian.Uint32(payload[0:4]))
-			compressedSize := int32(binary.BigEndian.Uint32(payload[4:8]))
-			payload = payload[8:]
-
-			if int(compressedSize) > len(payload) {
-				return fmt.Errorf("KwDataRowBatch: compressed data too short col=%d, need=%d, have=%d",
-					col, compressedSize, len(payload))
-			}
-
-			compressedData := payload[:compressedSize]
-			payload = payload[compressedSize:]
-
-			uncompressedBuffer := make([]byte, uncompressedSize)
-			if compressedSize > 0 {
-				err := m.decompressBlock(compressedData, uncompressedBuffer)
-				if err != nil {
-					return fmt.Errorf("KwDataRowBatch: decompress failed col=%d: %v", col, err)
-				}
-			} else {
-				copy(uncompressedBuffer, compressedData)
-			}
-
-			storageLen := int(m.StorageLen[col])
-			colBlockOffset := int(m.ColBlockOffset[col])
-
-			dataStart := colBlockOffset - offset
-			if dataStart < 0 || dataStart >= len(uncompressedBuffer) {
-				return fmt.Errorf("KwDataRowBatch: invalid data start col=%d offset=%d start=%d buffer=%d",
-					col, offset, dataStart, len(uncompressedBuffer))
-			}
-
-			offset += int(uncompressedSize)
-			dataSlice := uncompressedBuffer[dataStart:]
-
-			for row := 0; row < rowNum; row++ {
-				if len(dataSlice) < storageLen {
-					return fmt.Errorf("KwDataRowBatch: insufficient data for row=%d col=%d need=%d have=%d",
-						row, col, storageLen, len(dataSlice))
-				}
-
-				rowData := dataSlice[:storageLen]
-				dataSlice = dataSlice[storageLen:]
-
-				oid := m.ColOIDs[col]
-				txt, err := kwCellToText(oid, rowData)
-				if err != nil {
-					return fmt.Errorf("KwDataRowBatch: cell conversion failed row=%d col=%d: %v",
-						row, col, err)
-				}
-
-				m.ValuesTextRows[row][col] = txt
-			}
-		}
-
+	if len(m.ColOIDs) != colNum {
+		return 0, 0, fmt.Errorf("KwDataRowBatch: ColOIDs missing: have %d want %d", len(m.ColOIDs), colNum)
 	}
+
+	if cap(m.ValuesTextRows) < rowNum {
+		m.ValuesTextRows = make([][][]byte, rowNum)
+		allRows := make([][]byte, rowNum*colNum)
+		for r := 0; r < rowNum; r++ {
+			m.ValuesTextRows[r] = allRows[r*colNum : (r+1)*colNum]
+		}
+	} else {
+		m.ValuesTextRows = m.ValuesTextRows[:rowNum]
+		if cap(m.ValuesTextRows[0]) < colNum {
+			allRows := make([][]byte, rowNum*colNum)
+			for r := 0; r < rowNum; r++ {
+				m.ValuesTextRows[r] = allRows[r*colNum : (r+1)*colNum]
+			}
+		} else {
+			for r := 0; r < rowNum; r++ {
+				m.ValuesTextRows[r] = m.ValuesTextRows[r][:colNum]
+			}
+		}
+	}
+
+	m.Payload = src[rp:]
+	return rowNum, colNum, nil
+}
+
+// decodeUncompressed handles uncompressed payload decoding
+func (m *KwDataRowBatch) decodeUncompressed(rowNum, colNum int) error {
+	payload := m.Payload
+	lenPayload := len(payload)
+
+	for c := 0; c < colNum; c++ {
+		sl := int(m.StorageLen[c])
+		off := int(m.ColBlockOffset[c])
+		colEnd := off + rowNum*sl
+
+		// Single bounds check for the entire column block
+		if sl < 0 || off < 0 || colEnd > lenPayload {
+			return fmt.Errorf("col=%d: invalid storageLen=%d offset=%d colEnd=%d lenPayload=%d", c, sl, off, colEnd, lenPayload)
+		}
+
+		// Slice to exact column range for BCE optimization
+		colData := payload[off:colEnd]
+		oid := m.ColOIDs[c]
+
+		for r := 0; r < rowNum; r++ {
+			start := r * sl
+			end := start + sl
+			raw := colData[start:end]
+
+			txt, err := kwCellToText(oid, raw)
+			if err != nil {
+				return fmt.Errorf("col=%d row=%d: %w", c, r, err)
+			}
+			m.ValuesTextRows[r][c] = txt
+		}
+	}
+	return nil
+}
+
+// decodeCompressed handles compressed payload decoding
+func (m *KwDataRowBatch) decodeCompressed(rowNum, colNum int) error {
+	payload := m.Payload
+	offset := 0
+
+	for col := 0; col < colNum; col++ {
+		if len(payload) < sizeCompressedBlockHead {
+			return fmt.Errorf("col=%d: payload too short %d (<%d)", col, len(payload), sizeCompressedBlockHead)
+		}
+
+		uncompressedSize := int(binary.BigEndian.Uint32(payload[0:sizeUncompressed]))
+		compressedSize := int(binary.BigEndian.Uint32(payload[sizeUncompressed:sizeCompressedBlockHead]))
+		payload = payload[sizeCompressedBlockHead:]
+
+		if compressedSize > len(payload) {
+			return fmt.Errorf("col=%d: payload too short %d (<%d)", col, len(payload), compressedSize)
+		}
+
+		compressedData := payload[:compressedSize]
+		payload = payload[compressedSize:]
+
+		// Reuse buffer if possible
+		uncompressedBuffer := make([]byte, uncompressedSize)
+
+		if err := m.decompressBlock(compressedData, uncompressedBuffer); err != nil {
+			return fmt.Errorf("col=%d: %w", col, err)
+		}
+
+		storageLen := int(m.StorageLen[col])
+		colBlockOffset := int(m.ColBlockOffset[col])
+		dataStart := colBlockOffset - offset
+
+		if dataStart < 0 || dataStart >= len(uncompressedBuffer) {
+			return fmt.Errorf("col=%d: invalid dataStart=%d len(uncompressedBuffer)=%d", col, dataStart, len(uncompressedBuffer))
+		}
+
+		offset += uncompressedSize
+		dataSlice := uncompressedBuffer[dataStart:]
+		oid := m.ColOIDs[col]
+
+		for row := 0; row < rowNum; row++ {
+			if len(dataSlice) < storageLen {
+				return fmt.Errorf("col=%d row=%d: insufficient data %d (<%d)", col, row, len(dataSlice), storageLen)
+			}
+
+			rowData := dataSlice[:storageLen]
+			dataSlice = dataSlice[storageLen:]
+
+			txt, err := kwCellToText(oid, rowData)
+			if err != nil {
+				return fmt.Errorf("col=%d row=%d: %w", col, row, err)
+			}
+
+			m.ValuesTextRows[row][col] = txt
+		}
+	}
+
 	return nil
 }
 
@@ -203,7 +336,7 @@ func (m *KwDataRowBatch) Encode(dst []byte) []byte {
 
 func kwCellToText(oid uint32, cell []byte) ([]byte, error) {
 	switch oid {
-	case 1184, 1114, 1082: // timestamptz/timestamp/date
+	case oidTimestampTZ, oidTimestamp, oidDate: // timestamptz/timestamp/date
 		if len(cell) < 8 {
 			return nil, fmt.Errorf("ts cell too short %d", len(cell))
 		}
@@ -211,62 +344,68 @@ func kwCellToText(oid uint32, cell []byte) ([]byte, error) {
 		//t := time.Unix(0, v*int64(time.Millisecond)).UTC()
 		return cell[:8], nil
 
-	case 701: // float8
+	case oidFloat8: // float8
 		if len(cell) < 8 {
 			return nil, fmt.Errorf("float8 cell too short %d", len(cell))
 		}
 		//f := math.Float64frombits(binary.LittleEndian.Uint64(cell[:8]))
 		return cell[:8], nil
 
-	case 700: // float4
+	case oidFloat4: // float4
 		if len(cell) < 4 {
 			return nil, fmt.Errorf("float4 cell too short %d", len(cell))
 		}
 		//f := math.Float32frombits(binary.LittleEndian.Uint32(cell[:4]))
 		return cell[:4], nil
 
-	case 20: // int8
+	case oidInt8: // int8
 		if len(cell) < 8 {
 			return nil, fmt.Errorf("int8 cell too short %d", len(cell))
 		}
 		//v := int64(binary.LittleEndian.Uint64(cell[:8]))
 		return cell[:8], nil
 
-	case 23: // int4
+	case oidInt4: // int4
 		if len(cell) < 4 {
 			return nil, fmt.Errorf("int4 cell too short %d", len(cell))
 		}
 		//v := int64(int32(binary.LittleEndian.Uint32(cell[:4])))
 		return cell[:4], nil
 
-	case 25, 1043, 1042: // text/varchar/bpchar
+	case oidText, oidVarchar, oidBpchar: // text/varchar/bpchar
 		if len(cell) < 2 {
 			return []byte{}, nil
 		}
 		b := cell[2:]
 		for i, x := range b {
 			if x == 0 {
-				b = b[:i]
-				break
+				return b[:i], nil
 			}
 		}
 		return b, nil
 
 	default:
-		return []byte(hex.EncodeToString(cell)), nil
+		dst := make([]byte, hex.EncodedLen(len(cell)))
+		hex.Encode(dst, cell)
+		return dst, nil
 	}
 }
 
 // decompressBlock uncompress the data block
 func (m *KwDataRowBatch) decompressBlock(compressed, uncompressed []byte) error {
-	//  first attempt to extract with snappy
-	_, err := snappy.Decode(uncompressed, compressed)
-	if err != nil {
-		// if snappy fails, try lz4
-		_, err = lz4.UncompressBlock(compressed, uncompressed)
+	switch m.CompressionType {
+	case CompressionTypeSnappy:
+		_, err := snappy.Decode(uncompressed, compressed)
 		if err != nil {
-			return fmt.Errorf("decompress failed with both snappy and lz4: %v", err)
+			return fmt.Errorf("decompress failed with snappy: %v", err)
 		}
+	case CompressionTypeLZ4:
+		_, err := lz4.UncompressBlock(compressed, uncompressed)
+		if err != nil {
+			return fmt.Errorf("decompress failed with lz4: %v", err)
+		}
+	default:
+		return fmt.Errorf("unknown compression type %d", m.CompressionType)
 	}
 
 	return nil

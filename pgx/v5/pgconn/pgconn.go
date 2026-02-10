@@ -1415,9 +1415,8 @@ type ResultReader struct {
 	closed            bool
 	err               error
 
-	kwBatch   *pgproto3.KwDataRowBatch
-	kwColOIDs []uint32
-	kwRow     int
+	kwBatch *pgproto3.KwDataRowBatch
+	kwRow   int
 }
 
 // Result is the saved query response that is returned by calling Read on a ResultReader.
@@ -1575,16 +1574,6 @@ func (rr *ResultReader) receiveMessage() (msg pgproto3.BackendMessage, err error
 
 	switch msg := msg.(type) {
 	case *pgproto3.RowDescription:
-		n := len(msg.Fields)
-		if cap(rr.kwColOIDs) < n {
-			rr.kwColOIDs = make([]uint32, n)
-		} else {
-			rr.kwColOIDs = rr.kwColOIDs[:n]
-		}
-		for i := 0; i < n; i++ {
-			rr.kwColOIDs[i] = msg.Fields[i].DataTypeOID
-		}
-
 		rr.fieldDescriptions = rr.pgConn.convertRowDescription(rr.pgConn.fieldDescriptions[:], msg)
 	case *pgproto3.CommandComplete:
 		rr.concludeCommand(rr.pgConn.makeCommandTag(msg.CommandTag), nil)
@@ -2042,21 +2031,21 @@ func (p *Pipeline) Close() error {
 
 type kwRowChunk struct {
 	// from message header
-	rowNum int
-	colNum int
+	rowNum uint32
+	colNum uint16
 
-	storageLen     []int32
-	colBlockOffset []int32
+	storageLen     []uint32
+	colBlockOffset []uint32
 
 	compressionType int16
 	payload         []byte
 
-	cur int // next row index to emit
+	cur uint32 // next row index to emit
 }
 
 func (c *kwRowChunk) ResetFromMsg(m *pgproto3.KwDataRowBatch) {
-	c.rowNum = int(m.RowNum)
-	c.colNum = int(m.ColNum)
+	c.rowNum = m.RowNum
+	c.colNum = m.ColNum
 	c.storageLen = m.StorageLen
 	c.colBlockOffset = m.ColBlockOffset
 	c.compressionType = m.CompressionType
