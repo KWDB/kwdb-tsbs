@@ -271,48 +271,52 @@ func (m *KwDataRowBatch) decodeUncompressed(rowNum, colNum int) error {
 // decodeCompressed handles compressed payload decoding
 func (m *KwDataRowBatch) decodeCompressed(rowNum, colNum int) error {
 	payload := m.Payload
-	offset := 0
 
+	// New format: one compressed block for all columns.
+	if len(payload) < sizeCompressedBlockHead {
+		return fmt.Errorf("payload too short %d (<%d)", len(payload), sizeCompressedBlockHead)
+	}
+
+	uncompressedSize := int(binary.BigEndian.Uint32(payload[0:sizeUncompressed]))
+	compressedSize := int(binary.BigEndian.Uint32(payload[sizeUncompressed:sizeCompressedBlockHead]))
+	payload = payload[sizeCompressedBlockHead:]
+
+	if compressedSize > len(payload) {
+		return fmt.Errorf("payload too short %d (<%d)", len(payload), compressedSize)
+	}
+
+	compressedData := payload[:compressedSize]
+	// payload = payload[compressedSize:] // optional: if you want to validate trailing bytes
+
+	// Allocate uncompressed buffer once (optionally reuse via a field/pool; see note below).
+	uncompressedBuffer := make([]byte, uncompressedSize)
+
+	if err := m.decompressBlock(compressedData, uncompressedBuffer); err != nil {
+		return fmt.Errorf("decompress: %w", err)
+	}
+
+	// Optional sanity: ensure offsets are within buffer and the buffer is large enough.
+	// Now ColBlockOffset is interpreted as an offset into this uncompressedBuffer.
 	for col := 0; col < colNum; col++ {
-		if len(payload) < sizeCompressedBlockHead {
-			return fmt.Errorf("col=%d: payload too short %d (<%d)", col, len(payload), sizeCompressedBlockHead)
-		}
-
-		uncompressedSize := int(binary.BigEndian.Uint32(payload[0:sizeUncompressed]))
-		compressedSize := int(binary.BigEndian.Uint32(payload[sizeUncompressed:sizeCompressedBlockHead]))
-		payload = payload[sizeCompressedBlockHead:]
-
-		if compressedSize > len(payload) {
-			return fmt.Errorf("col=%d: payload too short %d (<%d)", col, len(payload), compressedSize)
-		}
-
-		compressedData := payload[:compressedSize]
-		payload = payload[compressedSize:]
-
-		// Reuse buffer if possible
-		uncompressedBuffer := make([]byte, uncompressedSize)
-
-		if err := m.decompressBlock(compressedData, uncompressedBuffer); err != nil {
-			return fmt.Errorf("col=%d: %w", col, err)
-		}
-
 		storageLen := int(m.StorageLen[col])
 		colBlockOffset := int(m.ColBlockOffset[col])
-		dataStart := colBlockOffset - offset
 
-		if dataStart < 0 || dataStart >= len(uncompressedBuffer) {
-			return fmt.Errorf("col=%d: invalid dataStart=%d len(uncompressedBuffer)=%d", col, dataStart, len(uncompressedBuffer))
+		if colBlockOffset < 0 || colBlockOffset >= len(uncompressedBuffer) {
+			return fmt.Errorf("col=%d: invalid ColBlockOffset=%d len(uncompressedBuffer)=%d",
+				col, colBlockOffset, len(uncompressedBuffer))
 		}
 
-		offset += uncompressedSize
-		dataSlice := uncompressedBuffer[dataStart:]
+		// Column data must contain rowNum * storageLen bytes starting at colBlockOffset.
+		need := rowNum * storageLen
+		if colBlockOffset+need > len(uncompressedBuffer) {
+			return fmt.Errorf("col=%d: insufficient column data: need %d bytes from offset %d (buf=%d)",
+				col, need, colBlockOffset, len(uncompressedBuffer))
+		}
+
+		dataSlice := uncompressedBuffer[colBlockOffset : colBlockOffset+need]
 		oid := m.ColOIDs[col]
 
 		for row := 0; row < rowNum; row++ {
-			if len(dataSlice) < storageLen {
-				return fmt.Errorf("col=%d row=%d: insufficient data %d (<%d)", col, row, len(dataSlice), storageLen)
-			}
-
 			rowData := dataSlice[:storageLen]
 			dataSlice = dataSlice[storageLen:]
 
@@ -320,7 +324,6 @@ func (m *KwDataRowBatch) decodeCompressed(rowNum, colNum int) error {
 			if err != nil {
 				return fmt.Errorf("col=%d row=%d: %w", col, row, err)
 			}
-
 			m.ValuesTextRows[row][col] = txt
 		}
 	}
