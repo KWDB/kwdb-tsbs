@@ -53,11 +53,13 @@ type Frontend struct {
 	portalSuspended                 PortalSuspended
 	aEParameter                     AEParameter
 	parameterDescriptionEx          ParameterDescriptionEx
+	kwDataRowBatch                  KwDataRowBatch
 
 	bodyLen    int
 	msgType    byte
 	partialMsg bool
 	authType   uint32
+	kwColOIDs  []uint32
 }
 
 // NewFrontend creates a new Frontend.
@@ -320,6 +322,16 @@ func (f *Frontend) Receive() (BackendMessage, error) {
 		msg = &f.parameterDescription
 	case 'T':
 		msg = &f.rowDescription
+
+		n := len(f.rowDescription.Fields)
+		if cap(f.kwColOIDs) < n {
+			f.kwColOIDs = make([]uint32, n)
+		} else {
+			f.kwColOIDs = f.kwColOIDs[:n]
+		}
+		for i := 0; i < n; i++ {
+			f.kwColOIDs[i] = f.rowDescription.Fields[i].DataTypeOID
+		}
 	case 'V':
 		msg = &f.functionCallResponse
 	case 'W':
@@ -328,6 +340,10 @@ func (f *Frontend) Receive() (BackendMessage, error) {
 		msg = &f.readyForQuery
 	case 'X':
 		msg = &f.parameterDescriptionEx
+	case 'M':
+		f.kwDataRowBatch.ColOIDs = f.kwColOIDs
+		msg = &f.kwDataRowBatch
+
 	default:
 		return nil, fmt.Errorf("unknown message type: %c", f.msgType)
 	}
