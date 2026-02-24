@@ -305,6 +305,16 @@ func (f *Frontend) Receive() (BackendMessage, error) {
 		msg = &f.parameterDescription
 	case 'T':
 		msg = &f.rowDescription
+
+		n := len(f.rowDescription.Fields)
+		if cap(f.kwColOIDs) < n {
+			f.kwColOIDs = make([]uint32, n)
+		} else {
+			f.kwColOIDs = f.kwColOIDs[:n]
+		}
+		for i := 0; i < n; i++ {
+			f.kwColOIDs[i] = f.rowDescription.Fields[i].DataTypeOID
+		}
 	case 'V':
 		msg = &f.functionCallResponse
 	case 'W':
@@ -325,18 +335,6 @@ func (f *Frontend) Receive() (BackendMessage, error) {
 
 	if f.tracer != nil {
 		f.tracer.traceMessage('B', int32(5+len(msgBody)), msg)
-	}
-
-	if f.msgType == 'T' {
-		n := len(f.rowDescription.Fields)
-		if cap(f.kwColOIDs) < n {
-			f.kwColOIDs = make([]uint32, n)
-		} else {
-			f.kwColOIDs = f.kwColOIDs[:n]
-		}
-		for i := 0; i < n; i++ {
-			f.kwColOIDs[i] = f.rowDescription.Fields[i].DataTypeOID
-		}
 	}
 
 	return msg, nil
