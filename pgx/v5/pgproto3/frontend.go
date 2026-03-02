@@ -52,7 +52,6 @@ type Frontend struct {
 	rowDescription                  RowDescription
 	portalSuspended                 PortalSuspended
 	aEParameter                     AEParameter
-	kwDataRowBatch                  KwDataRowBatch
 
 	bodyLen    int
 	msgType    byte
@@ -305,16 +304,6 @@ func (f *Frontend) Receive() (BackendMessage, error) {
 		msg = &f.parameterDescription
 	case 'T':
 		msg = &f.rowDescription
-
-		n := len(f.rowDescription.Fields)
-		if cap(f.kwColOIDs) < n {
-			f.kwColOIDs = make([]uint32, n)
-		} else {
-			f.kwColOIDs = f.kwColOIDs[:n]
-		}
-		for i := 0; i < n; i++ {
-			f.kwColOIDs[i] = f.rowDescription.Fields[i].DataTypeOID
-		}
 	case 'V':
 		msg = &f.functionCallResponse
 	case 'W':
@@ -322,8 +311,9 @@ func (f *Frontend) Receive() (BackendMessage, error) {
 	case 'Z':
 		msg = &f.readyForQuery
 	case 'M':
-		f.kwDataRowBatch.ColOIDs = f.kwColOIDs
-		msg = &f.kwDataRowBatch
+		msg = &KwDataRowBatchRaw{
+			ColOIDs: append(make([]uint32, 0, len(f.kwColOIDs)), f.kwColOIDs...),
+		}
 
 	default:
 		return nil, fmt.Errorf("unknown message type: %c", f.msgType)
@@ -335,6 +325,18 @@ func (f *Frontend) Receive() (BackendMessage, error) {
 
 	if f.tracer != nil {
 		f.tracer.traceMessage('B', int32(5+len(msgBody)), msg)
+	}
+
+	if f.msgType == 'T' {
+		n := len(f.rowDescription.Fields)
+		if cap(f.kwColOIDs) < n {
+			f.kwColOIDs = make([]uint32, n)
+		} else {
+			f.kwColOIDs = f.kwColOIDs[:n]
+		}
+		for i := 0; i < n; i++ {
+			f.kwColOIDs[i] = f.rowDescription.Fields[i].DataTypeOID
+		}
 	}
 
 	return msg, nil
