@@ -13,6 +13,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/internal/iobufpool"
@@ -1401,18 +1402,22 @@ func (mrr *MultiResultReader) Close() error {
 	return mrr.err
 }
 
-const kwBatchDecodeQueueSize = 8
-
-type kwBatchDecodeMode uint8
-
 const (
-	kwBatchDecodeModeAsync kwBatchDecodeMode = iota
-	kwBatchDecodeModeSync
+	kwBatchDecodeQueueSize          = 8
+	kwBatchDecodeInflightByteBudget = 8 << 20
 )
 
+var kwDecodedBatchPool = sync.Pool{
+	New: func() any {
+		return &pgproto3.KwDataRowBatch{}
+	},
+}
+
 type kwBatchDecodeResult struct {
-	batch *pgproto3.KwDataRowBatch
-	err   error
+	raw         *pgproto3.KwDataRowBatchRaw
+	batch       *pgproto3.KwDataRowBatch
+	batchPooled bool
+	err         error
 }
 
 // ResultReader is a reader for the result of a single query.
@@ -1429,9 +1434,11 @@ type ResultReader struct {
 	closed            bool
 	err               error
 
-	kwDecodeMode kwBatchDecodeMode
-	kwBatch      *pgproto3.KwDataRowBatch
-	kwRow        int
+	kwBatch       *pgproto3.KwDataRowBatch
+	kwBatchRaw    *pgproto3.KwDataRowBatchRaw
+	kwBatchPooled bool
+	kwRow         int
+	kwDeferredRaw *pgproto3.KwDataRowBatchRaw
 
 	kwRawQueue          chan *pgproto3.KwDataRowBatchRaw
 	kwDecodedQueue      chan kwBatchDecodeResult
@@ -1440,6 +1447,7 @@ type ResultReader struct {
 	kwDecodeInputClosed bool
 	kwDecodeCanceled    bool
 	kwPendingBatches    int
+	kwPendingBytes      int64
 }
 
 // Result is the saved query response that is returned by calling Read on a ResultReader.
@@ -1481,6 +1489,14 @@ func (rr *ResultReader) NextRow() bool {
 	}
 
 	for {
+		if rr.kwDeferredRaw != nil {
+			raw := rr.kwDeferredRaw
+			rr.kwDeferredRaw = nil
+			if rr.enqueueKwRawBatch(raw) {
+				return true
+			}
+		}
+
 		if rr.tryDequeueDecodedBatch(false) {
 			return true
 		}
@@ -1522,23 +1538,11 @@ func (rr *ResultReader) NextRow() bool {
 			return true
 
 		case *pgproto3.KwDataRowBatch:
-			if rr.setKwBatch(msg) {
+			if rr.setKwBatch(msg, nil, false) {
 				return true
 			}
 		case *pgproto3.KwDataRowBatchRaw:
-			if rr.kwDecodeMode == kwBatchDecodeModeSync {
-				if rr.decodeKwRawBatchSync(msg) {
-					return true
-				}
-				rr.shutdownKwDecodeWorker(true)
-				return false
-			}
-
-			rr.ensureKwDecodeWorkerStarted()
-			rr.kwPendingBatches++
-			rr.kwRawQueue <- msg
-
-			if rr.tryDequeueDecodedBatch(false) {
+			if rr.enqueueKwRawBatch(msg) {
 				return true
 			}
 		}
@@ -1560,29 +1564,81 @@ func (rr *ResultReader) nextRowFromKwBatch() bool {
 		return true
 	}
 
-	rr.kwBatch = nil
-	rr.kwRow = 0
+	rr.releaseActiveKwBatch()
 	return false
 }
 
-func (rr *ResultReader) setKwBatch(batch *pgproto3.KwDataRowBatch) bool {
+func (rr *ResultReader) enqueueKwRawBatch(raw *pgproto3.KwDataRowBatchRaw) bool {
+	rr.ensureKwDecodeWorkerStarted()
+
+	rawBytes := int64(len(raw.Body))
+	for rr.kwPendingBatches > 0 && rr.kwPendingBytes+rawBytes > kwBatchDecodeInflightByteBudget {
+		if rr.tryDequeueDecodedBatch(true) {
+			rr.kwDeferredRaw = raw
+			return true
+		}
+		if rr.err != nil {
+			pgproto3.ReleaseKwDataRowBatchRaw(raw)
+			return false
+		}
+	}
+
+	rr.kwPendingBatches++
+	rr.kwPendingBytes += rawBytes
+	rr.kwRawQueue <- raw
+
+	return rr.tryDequeueDecodedBatch(false)
+}
+
+func (rr *ResultReader) setKwBatch(batch *pgproto3.KwDataRowBatch, raw *pgproto3.KwDataRowBatchRaw, batchPooled bool) bool {
 	if batch == nil || len(batch.ValuesTextRows) == 0 {
+		if batchPooled {
+			releaseKwDecodedBatch(batch)
+		}
+		pgproto3.ReleaseKwDataRowBatchRaw(raw)
 		return false
 	}
 
+	rr.releaseActiveKwBatch()
 	rr.kwBatch = batch
+	rr.kwBatchRaw = raw
+	rr.kwBatchPooled = batchPooled
 	rr.kwRow = 1
 	rr.rowValues = batch.ValuesTextRows[0]
 	return true
 }
 
-func decodeKwDataRowBatchRaw(raw *pgproto3.KwDataRowBatchRaw) (*pgproto3.KwDataRowBatch, error) {
-	batch := &pgproto3.KwDataRowBatch{}
-	if err := raw.DecodeInto(batch); err != nil {
-		return nil, err
+func (rr *ResultReader) releaseActiveKwBatch() {
+	if rr.kwBatchPooled && rr.kwBatch != nil {
+		releaseKwDecodedBatch(rr.kwBatch)
 	}
+	pgproto3.ReleaseKwDataRowBatchRaw(rr.kwBatchRaw)
 
-	return batch, nil
+	rr.kwBatch = nil
+	rr.kwBatchRaw = nil
+	rr.kwBatchPooled = false
+	rr.kwRow = 0
+}
+
+func (rr *ResultReader) releaseDeferredKwRaw() {
+	pgproto3.ReleaseKwDataRowBatchRaw(rr.kwDeferredRaw)
+	rr.kwDeferredRaw = nil
+}
+
+func acquireKwDecodedBatch() *pgproto3.KwDataRowBatch {
+	return kwDecodedBatchPool.Get().(*pgproto3.KwDataRowBatch)
+}
+
+func releaseKwDecodedBatch(batch *pgproto3.KwDataRowBatch) {
+	if batch == nil {
+		return
+	}
+	batch.ResetForReuse()
+	kwDecodedBatchPool.Put(batch)
+}
+
+func decodeKwDataRowBatchRaw(raw *pgproto3.KwDataRowBatchRaw, dst *pgproto3.KwDataRowBatch) error {
+	return raw.DecodeInto(dst)
 }
 
 func runKwDataRowBatchDecodeWorker(input <-chan *pgproto3.KwDataRowBatchRaw, output chan<- kwBatchDecodeResult, cancel <-chan struct{}) {
@@ -1600,21 +1656,28 @@ func runKwDataRowBatchDecodeWorker(input <-chan *pgproto3.KwDataRowBatchRaw, out
 			}
 
 			if failed {
+				pgproto3.ReleaseKwDataRowBatchRaw(raw)
 				continue
 			}
 
-			batch, err := decodeKwDataRowBatchRaw(raw)
+			batch := acquireKwDecodedBatch()
+			err := decodeKwDataRowBatchRaw(raw, batch)
 			result := kwBatchDecodeResult{
-				batch: batch,
-				err:   err,
+				raw: raw,
+				err: err,
 			}
 
 			if err != nil {
+				releaseKwDecodedBatch(batch)
 				failed = true
+			} else {
+				result.batch = batch
+				result.batchPooled = true
 			}
 
 			select {
 			case <-cancel:
+				releaseDecodedResult(result)
 				return
 			case output <- result:
 			}
@@ -1623,7 +1686,7 @@ func runKwDataRowBatchDecodeWorker(input <-chan *pgproto3.KwDataRowBatchRaw, out
 }
 
 func (rr *ResultReader) ensureKwDecodeWorkerStarted() {
-	if rr.kwDecodeMode != kwBatchDecodeModeAsync || rr.kwDecodeStarted {
+	if rr.kwDecodeStarted {
 		return
 	}
 
@@ -1663,10 +1726,14 @@ func (rr *ResultReader) resetKwDecodeState() {
 	rr.kwDecodeInputClosed = false
 	rr.kwDecodeCanceled = false
 	rr.kwPendingBatches = 0
+	rr.kwPendingBytes = 0
+	rr.kwDeferredRaw = nil
 }
 
 func (rr *ResultReader) shutdownKwDecodeWorker(discardPending bool) {
 	if !rr.kwDecodeStarted {
+		rr.releaseDeferredKwRaw()
+		rr.releaseActiveKwBatch()
 		return
 	}
 
@@ -1675,10 +1742,22 @@ func (rr *ResultReader) shutdownKwDecodeWorker(discardPending bool) {
 		rr.cancelKwDecodeWorker()
 	}
 
-	for range rr.kwDecodedQueue {
+	for result := range rr.kwDecodedQueue {
+		releaseDecodedResult(result)
 	}
 
+	rr.releaseDeferredKwRaw()
+	rr.releaseActiveKwBatch()
 	rr.resetKwDecodeState()
+}
+
+func releaseDecodedResult(result kwBatchDecodeResult) {
+	if result.batchPooled {
+		releaseKwDecodedBatch(result.batch)
+	}
+	if result.raw != nil {
+		pgproto3.ReleaseKwDataRowBatchRaw(result.raw)
+	}
 }
 
 func (rr *ResultReader) tryDequeueDecodedBatch(block bool) bool {
@@ -1706,32 +1785,31 @@ func (rr *ResultReader) tryDequeueDecodedBatch(block bool) bool {
 			rr.concludeCommand(CommandTag{}, errors.New("kw data row decode worker stopped unexpectedly"))
 		}
 		rr.kwPendingBatches = 0
+		rr.kwPendingBytes = 0
 		return false
 	}
 
 	if rr.kwPendingBatches > 0 {
 		rr.kwPendingBatches--
 	}
+	if result.raw != nil {
+		rr.kwPendingBytes -= int64(len(result.raw.Body))
+		if rr.kwPendingBytes < 0 {
+			rr.kwPendingBytes = 0
+		}
+	}
 
 	if result.err != nil {
 		rr.kwPendingBatches = 0
+		rr.kwPendingBytes = 0
+		releaseDecodedResult(result)
 		rr.concludeCommand(CommandTag{}, result.err)
 		rr.cancelKwDecodeWorker()
 		rr.closeKwDecodeInput()
 		return false
 	}
 
-	return rr.setKwBatch(result.batch)
-}
-
-func (rr *ResultReader) decodeKwRawBatchSync(raw *pgproto3.KwDataRowBatchRaw) bool {
-	batch, err := decodeKwDataRowBatchRaw(raw)
-	if err != nil {
-		rr.concludeCommand(CommandTag{}, err)
-		return false
-	}
-
-	return rr.setKwBatch(batch)
+	return rr.setKwBatch(result.batch, result.raw, result.batchPooled)
 }
 
 // FieldDescriptions returns the field descriptions for the current result set. The returned slice is only valid until
