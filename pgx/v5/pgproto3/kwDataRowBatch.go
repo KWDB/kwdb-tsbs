@@ -133,11 +133,36 @@ type KwDataRowBatch struct {
 
 	decompressor Decompressor
 }
+
+// KwDataRowBatchRaw keeps the raw body of an 'M' message for deferred decoding.
+type KwDataRowBatchRaw struct {
+	ColOIDs []uint32
+	Body    []byte
+}
+
 type Decompressor interface {
 	Decompress(compressed, uncompressed []byte) error
 }
 
-func (*KwDataRowBatch) Backend() {}
+func (*KwDataRowBatch) Backend()    {}
+func (*KwDataRowBatchRaw) Backend() {}
+
+// Decode stores the message body for later decoding.
+func (m *KwDataRowBatchRaw) Decode(src []byte) error {
+	m.Body = append(m.Body[:0], src...)
+	return nil
+}
+
+// Encode is a stub to satisfy the Message interface. Raw messages are backend-only.
+func (m *KwDataRowBatchRaw) Encode(dst []byte) []byte {
+	return dst
+}
+
+// DecodeInto decodes the raw message body into a parsed batch.
+func (m *KwDataRowBatchRaw) DecodeInto(dst *KwDataRowBatch) error {
+	dst.ColOIDs = m.ColOIDs
+	return dst.Decode(m.Body)
+}
 
 // Decode parses the message body (without the type byte and length).
 func (m *KwDataRowBatch) Decode(src []byte) error {
@@ -179,8 +204,8 @@ func (m *KwDataRowBatch) decodeMeta(src []byte) (rowNum, colNum int, err error) 
 	rowNum = int(m.RowNum)
 	colNum = int(m.ColNum)
 
-	requiredMetadataLen := minMsgBodyLen + colNum*sizeColumnMetadata
-	if requiredMetadataLen > msglen {
+	requiredHeaderLen := minMsgBodyLen + colNum*sizeColumnMetadata + sizeCapacity + sizeCompressionType
+	if requiredHeaderLen > msglen {
 		return 0, 0, fmt.Errorf("KwDataRowBatch: body too short for %d meta (len=%d)", m.ColNum, msglen)
 	}
 
