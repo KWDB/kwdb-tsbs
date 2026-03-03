@@ -57,7 +57,7 @@ type Frontend struct {
 	msgType    byte
 	partialMsg bool
 	authType   uint32
-	kwOIDSet   *KwOIDSnapshot
+	kwColOIDs  []uint32
 }
 
 // NewFrontend creates a new Frontend.
@@ -311,18 +311,15 @@ func (f *Frontend) Receive() (BackendMessage, error) {
 	case 'Z':
 		msg = &f.readyForQuery
 	case 'M':
-		raw := AcquireKwDataRowBatchRaw()
-		raw.OIDSnapshot = f.kwOIDSet
-		msg = raw
+		msg = &KwDataRowBatchRaw{
+			ColOIDs: append(make([]uint32, 0, len(f.kwColOIDs)), f.kwColOIDs...),
+		}
 
 	default:
 		return nil, fmt.Errorf("unknown message type: %c", f.msgType)
 	}
 	err = msg.Decode(msgBody)
 	if err != nil {
-		if raw, ok := msg.(*KwDataRowBatchRaw); ok {
-			ReleaseKwDataRowBatchRaw(raw)
-		}
 		return nil, err
 	}
 
@@ -332,11 +329,14 @@ func (f *Frontend) Receive() (BackendMessage, error) {
 
 	if f.msgType == 'T' {
 		n := len(f.rowDescription.Fields)
-		oids := make([]uint32, n)
-		for i := 0; i < n; i++ {
-			oids[i] = f.rowDescription.Fields[i].DataTypeOID
+		if cap(f.kwColOIDs) < n {
+			f.kwColOIDs = make([]uint32, n)
+		} else {
+			f.kwColOIDs = f.kwColOIDs[:n]
 		}
-		f.kwOIDSet = &KwOIDSnapshot{OIDs: oids}
+		for i := 0; i < n; i++ {
+			f.kwColOIDs[i] = f.rowDescription.Fields[i].DataTypeOID
+		}
 	}
 
 	return msg, nil

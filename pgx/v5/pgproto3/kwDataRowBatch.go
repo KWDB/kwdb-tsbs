@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"sync"
 
 	"github.com/golang/snappy"
 	"github.com/pierrec/lz4"
@@ -132,27 +131,13 @@ type KwDataRowBatch struct {
 	ColOIDs        []uint32
 	ValuesTextRows [][][]byte
 
-	decompressor            Decompressor
-	decompressColumnBuffers [][]byte
-}
-
-// KwOIDSnapshot stores immutable column OIDs for a row description.
-type KwOIDSnapshot struct {
-	OIDs []uint32
+	decompressor Decompressor
 }
 
 // KwDataRowBatchRaw keeps the raw body of an 'M' message for deferred decoding.
 type KwDataRowBatchRaw struct {
-	OIDSnapshot *KwOIDSnapshot
-	Body        []byte
-}
-
-const maxRetainedRawBodyCap = 1 << 20
-
-var kwDataRowBatchRawPool = sync.Pool{
-	New: func() any {
-		return &KwDataRowBatchRaw{}
-	},
+	ColOIDs []uint32
+	Body    []byte
 }
 
 type Decompressor interface {
@@ -161,31 +146,6 @@ type Decompressor interface {
 
 func (*KwDataRowBatch) Backend()    {}
 func (*KwDataRowBatchRaw) Backend() {}
-
-// AcquireKwDataRowBatchRaw gets a reusable raw row-batch holder.
-func AcquireKwDataRowBatchRaw() *KwDataRowBatchRaw {
-	return kwDataRowBatchRawPool.Get().(*KwDataRowBatchRaw)
-}
-
-// ReleaseKwDataRowBatchRaw returns a raw row-batch holder to the pool.
-func ReleaseKwDataRowBatchRaw(raw *KwDataRowBatchRaw) {
-	if raw == nil {
-		return
-	}
-
-	raw.Reset()
-	kwDataRowBatchRawPool.Put(raw)
-}
-
-// Reset clears references so the raw object can be safely reused.
-func (m *KwDataRowBatchRaw) Reset() {
-	m.OIDSnapshot = nil
-	if cap(m.Body) > maxRetainedRawBodyCap {
-		m.Body = nil
-		return
-	}
-	m.Body = m.Body[:0]
-}
 
 // Decode stores the message body for later decoding.
 func (m *KwDataRowBatchRaw) Decode(src []byte) error {
@@ -200,24 +160,8 @@ func (m *KwDataRowBatchRaw) Encode(dst []byte) []byte {
 
 // DecodeInto decodes the raw message body into a parsed batch.
 func (m *KwDataRowBatchRaw) DecodeInto(dst *KwDataRowBatch) error {
-	if m.OIDSnapshot != nil {
-		dst.ColOIDs = m.OIDSnapshot.OIDs
-	} else {
-		dst.ColOIDs = nil
-	}
+	dst.ColOIDs = m.ColOIDs
 	return dst.Decode(m.Body)
-}
-
-// ResetForReuse clears references retained by the decoded batch before pooling.
-func (m *KwDataRowBatch) ResetForReuse() {
-	m.RowNum = 0
-	m.ColNum = 0
-	m.RowSize = 0
-	m.Capacity = 0
-	m.CompressionType = 0
-	m.Payload = nil
-	m.ColOIDs = nil
-	m.ValuesTextRows = nil
 }
 
 // Decode parses the message body (without the type byte and length).
@@ -354,12 +298,6 @@ func (m *KwDataRowBatch) decodeCompressed(rowNum, colNum int) error {
 	payload := m.Payload
 	offset := 0
 
-	if cap(m.decompressColumnBuffers) < colNum {
-		m.decompressColumnBuffers = make([][]byte, colNum)
-	} else {
-		m.decompressColumnBuffers = m.decompressColumnBuffers[:colNum]
-	}
-
 	for col := 0; col < colNum; col++ {
 		if len(payload) < sizeCompressedBlockHead {
 			return fmt.Errorf("col=%d: payload too short %d (<%d)", col, len(payload), sizeCompressedBlockHead)
@@ -376,13 +314,8 @@ func (m *KwDataRowBatch) decodeCompressed(rowNum, colNum int) error {
 		compressedData := payload[:compressedSize]
 		payload = payload[compressedSize:]
 
-		uncompressedBuffer := m.decompressColumnBuffers[col]
-		if cap(uncompressedBuffer) < uncompressedSize {
-			uncompressedBuffer = make([]byte, uncompressedSize)
-		} else {
-			uncompressedBuffer = uncompressedBuffer[:uncompressedSize]
-		}
-		m.decompressColumnBuffers[col] = uncompressedBuffer
+		// Reuse buffer if possible
+		uncompressedBuffer := make([]byte, uncompressedSize)
 
 		if err := m.decompressBlock(compressedData, uncompressedBuffer); err != nil {
 			return fmt.Errorf("col=%d: %w", col, err)
