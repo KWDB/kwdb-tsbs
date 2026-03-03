@@ -1067,8 +1067,9 @@ func (pgConn *PgConn) ExecPrepared(ctx context.Context, stmtName string, paramVa
 
 func (pgConn *PgConn) execExtendedPrefix(ctx context.Context, paramValues [][]byte) *ResultReader {
 	pgConn.resultReader = ResultReader{
-		pgConn: pgConn,
-		ctx:    ctx,
+		pgConn:       pgConn,
+		ctx:          ctx,
+		kwDecodeMode: kwBatchDecodeModeAuto,
 	}
 	result := &pgConn.resultReader
 
@@ -1364,6 +1365,7 @@ func (mrr *MultiResultReader) NextResult() bool {
 				multiResultReader: mrr,
 				ctx:               mrr.ctx,
 				fieldDescriptions: mrr.pgConn.convertRowDescription(mrr.pgConn.fieldDescriptions[:], msg),
+				kwDecodeMode:      kwBatchDecodeModeAuto,
 			}
 
 			mrr.rr = &mrr.pgConn.resultReader
@@ -1401,12 +1403,20 @@ func (mrr *MultiResultReader) Close() error {
 	return mrr.err
 }
 
-const kwBatchDecodeQueueSize = 8
+const (
+	kwBatchDecodeQueueSize = 8
+
+	kwAdaptiveMinSyncSamples      = 2
+	kwAdaptiveLargeBatchBytes     = 64 << 10
+	kwAdaptiveSyncDecodeThreshold = int64(250 * time.Microsecond)
+	kwAdaptiveEWMAWeightDivisor   = 4
+)
 
 type kwBatchDecodeMode uint8
 
 const (
-	kwBatchDecodeModeAsync kwBatchDecodeMode = iota
+	kwBatchDecodeModeAuto kwBatchDecodeMode = iota
+	kwBatchDecodeModeAsync
 	kwBatchDecodeModeSync
 )
 
@@ -1429,9 +1439,12 @@ type ResultReader struct {
 	closed            bool
 	err               error
 
-	kwDecodeMode kwBatchDecodeMode
-	kwBatch      *pgproto3.KwDataRowBatch
-	kwRow        int
+	kwDecodeMode  kwBatchDecodeMode
+	kwBatch       *pgproto3.KwDataRowBatch
+	kwRow         int
+	kwSyncSamples int
+	kwAvgSyncNs   int64
+	kwAvgRawBytes int64
 
 	kwRawQueue          chan *pgproto3.KwDataRowBatchRaw
 	kwDecodedQueue      chan kwBatchDecodeResult
@@ -1534,11 +1547,19 @@ func (rr *ResultReader) NextRow() bool {
 				return false
 			}
 
-			rr.ensureKwDecodeWorkerStarted()
-			rr.kwPendingBatches++
-			rr.kwRawQueue <- msg
+			if rr.kwDecodeMode == kwBatchDecodeModeAuto {
+				if rr.shouldDecodeKwBatchAsync(msg) {
+					rr.kwDecodeMode = kwBatchDecodeModeAsync
+				} else {
+					if rr.decodeKwRawBatchSyncAdaptive(msg) {
+						return true
+					}
+					rr.shutdownKwDecodeWorker(true)
+					return false
+				}
+			}
 
-			if rr.tryDequeueDecodedBatch(false) {
+			if rr.enqueueKwRawBatchForAsync(msg) {
 				return true
 			}
 		}
@@ -1574,6 +1595,32 @@ func (rr *ResultReader) setKwBatch(batch *pgproto3.KwDataRowBatch) bool {
 	rr.kwRow = 1
 	rr.rowValues = batch.ValuesTextRows[0]
 	return true
+}
+
+func ewmaInt64(prev, sample int64) int64 {
+	if prev == 0 {
+		return sample
+	}
+
+	return prev + (sample-prev)/kwAdaptiveEWMAWeightDivisor
+}
+
+func (rr *ResultReader) observeKwSyncDecode(rawBytes int, elapsed time.Duration) {
+	rr.kwSyncSamples++
+	rr.kwAvgSyncNs = ewmaInt64(rr.kwAvgSyncNs, elapsed.Nanoseconds())
+	rr.kwAvgRawBytes = ewmaInt64(rr.kwAvgRawBytes, int64(rawBytes))
+}
+
+func (rr *ResultReader) shouldDecodeKwBatchAsync(raw *pgproto3.KwDataRowBatchRaw) bool {
+	if raw != nil && len(raw.Body) >= kwAdaptiveLargeBatchBytes {
+		return true
+	}
+
+	if rr.kwSyncSamples < kwAdaptiveMinSyncSamples {
+		return false
+	}
+
+	return rr.kwAvgSyncNs >= kwAdaptiveSyncDecodeThreshold || rr.kwAvgRawBytes >= kwAdaptiveLargeBatchBytes
 }
 
 func decodeKwDataRowBatchRaw(raw *pgproto3.KwDataRowBatchRaw) (*pgproto3.KwDataRowBatch, error) {
@@ -1724,6 +1771,13 @@ func (rr *ResultReader) tryDequeueDecodedBatch(block bool) bool {
 	return rr.setKwBatch(result.batch)
 }
 
+func (rr *ResultReader) enqueueKwRawBatchForAsync(raw *pgproto3.KwDataRowBatchRaw) bool {
+	rr.ensureKwDecodeWorkerStarted()
+	rr.kwPendingBatches++
+	rr.kwRawQueue <- raw
+	return rr.tryDequeueDecodedBatch(false)
+}
+
 func (rr *ResultReader) decodeKwRawBatchSync(raw *pgproto3.KwDataRowBatchRaw) bool {
 	batch, err := decodeKwDataRowBatchRaw(raw)
 	if err != nil {
@@ -1731,6 +1785,18 @@ func (rr *ResultReader) decodeKwRawBatchSync(raw *pgproto3.KwDataRowBatchRaw) bo
 		return false
 	}
 
+	return rr.setKwBatch(batch)
+}
+
+func (rr *ResultReader) decodeKwRawBatchSyncAdaptive(raw *pgproto3.KwDataRowBatchRaw) bool {
+	start := time.Now()
+	batch, err := decodeKwDataRowBatchRaw(raw)
+	if err != nil {
+		rr.concludeCommand(CommandTag{}, err)
+		return false
+	}
+
+	rr.observeKwSyncDecode(len(raw.Body), time.Since(start))
 	return rr.setKwBatch(batch)
 }
 
@@ -2185,6 +2251,7 @@ func (p *Pipeline) GetResults() (results any, err error) {
 				pipeline:          p,
 				ctx:               p.ctx,
 				fieldDescriptions: p.conn.convertRowDescription(p.conn.fieldDescriptions[:], msg),
+				kwDecodeMode:      kwBatchDecodeModeAuto,
 			}
 			return &p.conn.resultReader, nil
 		case *pgproto3.CommandComplete:
