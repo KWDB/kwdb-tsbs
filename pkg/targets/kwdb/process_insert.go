@@ -19,6 +19,8 @@ const (
 	Size1M            = 1 * 1024 * 1024
 	LenReadings       = 115
 	LenDiagnostics    = 80
+	cpuCreatePrefix   = "insert into %s.cpu (hostname,region,datacenter,rack,os,arch,team,service,service_version,service_environment) values"
+	cpuInsertPrefix   = "insert into %s.cpu (k_timestamp,usage_user,usage_system,usage_idle,usage_nice,usage_iowait,usage_irq,usage_softirq,usage_steal,usage_guest,usage_guest_nice,hostname) values"
 	readingsSuffix    = "readings"
 	readingsPrefix    = "insert into %s.readings (k_timestamp,latitude,longitude,elevation,velocity,heading,grade,fuel_consumption,name)values"
 	diagnosticsPrefix = "insert into %s.diagnostics (k_timestamp,fuel_state,current_load,status,name)values"
@@ -30,6 +32,11 @@ type Ctx struct {
 }
 
 var globalSCI = &syncCSI{}
+
+const (
+	cpuSQLKnown = iota + 1
+	cpuSQLUnknown
+)
 
 type processorInsert struct {
 	opts   *LoadingOptions
@@ -58,6 +65,74 @@ func (p *processorInsert) Init(proNum int, doLoad, _ bool) {
 
 }
 
+func buildCPUCreateSQL(dbName string, createRows []*point) string {
+	if len(createRows) == 0 {
+		return ""
+	}
+
+	prefix := fmt.Sprintf(cpuCreatePrefix, dbName)
+	totalLen := len(prefix)
+	for _, row := range createRows {
+		totalLen += len(row.sql) + 1
+	}
+
+	var sqlBuilder strings.Builder
+	sqlBuilder.Grow(totalLen)
+	sqlBuilder.WriteString(prefix)
+
+	for i, row := range createRows {
+		if i > 0 {
+			sqlBuilder.WriteByte(',')
+		}
+		sqlBuilder.WriteString(row.sql)
+	}
+
+	return sqlBuilder.String()
+}
+
+func buildCPUInsertSQL(dbName string, batches map[string][]string, route func(hostname string) int) (sql1, sql2 string, rowCnt uint64) {
+	if len(batches) == 0 {
+		return "", "", 0
+	}
+
+	prefix := fmt.Sprintf(cpuInsertPrefix, dbName)
+	var sqlBuilder1, sqlBuilder2 strings.Builder
+	sqlBuilder1.Grow(len(prefix))
+	sqlBuilder2.Grow(len(prefix))
+	sqlBuilder1.WriteString(prefix)
+	sqlBuilder2.WriteString(prefix)
+	hasSQL1, hasSQL2 := false, false
+
+	for hostname, sqls := range batches {
+		rowCnt += uint64(len(sqls))
+		if route(hostname) == cpuSQLKnown {
+			hasSQL1 = appendCPUSQLRows(&sqlBuilder1, sqls, hasSQL1)
+			continue
+		}
+		hasSQL2 = appendCPUSQLRows(&sqlBuilder2, sqls, hasSQL2)
+	}
+
+	if hasSQL1 {
+		sql1 = sqlBuilder1.String()
+	}
+	if hasSQL2 {
+		sql2 = sqlBuilder2.String()
+	}
+
+	return sql1, sql2, rowCnt
+}
+
+func appendCPUSQLRows(builder *strings.Builder, sqls []string, hasRows bool) bool {
+	for _, sql := range sqls {
+		if hasRows {
+			builder.WriteByte(',')
+		}
+		builder.WriteString(sql)
+		hasRows = true
+	}
+	return hasRows
+}
+
 func (p *processorInsert) ProcessBatch(b targets.Batch, doLoad bool) (metricCount, rowCount uint64) {
 	batches := b.(*hypertableArr)
 	rowCnt := uint64(0)
@@ -72,7 +147,7 @@ func (p *processorInsert) ProcessBatch(b targets.Batch, doLoad bool) (metricCoun
 	var deviceNum int
 	if p.opts.Case == "cpu-only" {
 		if p.opts.DoCreate && len(batches.createSql) > 0 {
-			deviceContexts := make(map[string]*Ctx)
+			deviceContexts := make(map[string]*Ctx, len(batches.createSql))
 			for _, row := range batches.createSql {
 				c, cancel := context.WithCancel(context.Background())
 				ctx := &Ctx{
@@ -83,17 +158,7 @@ func (p *processorInsert) ProcessBatch(b targets.Batch, doLoad bool) (metricCoun
 				deviceContexts[row.device] = actual.(*Ctx)
 			}
 
-			var sqlBuilder strings.Builder
-			sqlBuilder.WriteString(fmt.Sprintf("insert into %s.cpu (hostname,region,datacenter,rack,os,arch,team,service,service_version,service_environment) values", p.dbName))
-
-			for i, row := range batches.createSql {
-				if i > 0 {
-					sqlBuilder.WriteString(",")
-				}
-				sqlBuilder.WriteString(row.sql)
-			}
-
-			sql := sqlBuilder.String()
+			sql := buildCPUCreateSQL(p.dbName, batches.createSql)
 			_, err := p._db.Connection.Exec(context.Background(), sql)
 			if err != nil {
 				panic(fmt.Sprintf("kwdb insert data failed,err :%s", err))
@@ -104,49 +169,35 @@ func (p *processorInsert) ProcessBatch(b targets.Batch, doLoad bool) (metricCoun
 			}
 		}
 
-		p.buf.Reset()
-		tagsname := fmt.Sprintf("usage_user,usage_system,usage_idle,usage_nice,usage_iowait,usage_irq,usage_softirq,usage_steal,usage_guest,usage_guest_nice")
-		sql1 := fmt.Sprintf("insert into %s.cpu (k_timestamp,%s,hostname) values", p.dbName, tagsname)
-		sql2 := sql1
-		cnt1, cnt2 := 0, 0
-		for hostname, sqls := range batches.m {
-			rowCnt += uint64(len(sqls))
-			// var csvSQL string
-			csvSQL := strings.Join(sqls, ",")
+		sql1, sql2, batchRows := buildCPUInsertSQL(p.dbName, batches.m, func(hostname string) int {
 			v, ok := p.sci.m.Load(hostname)
-			// fmt.Println(hostname)
 			if ok {
 				<-v.(*Ctx).c.Done()
-				sql1 += csvSQL + ","
-				cnt1++
-			} else {
-				// wait for allTag data inserted
-				allTagC, allTagCancel := context.WithCancel(context.Background())
-				allTagCtx := &Ctx{
-					c:      allTagC,
-					cancel: allTagCancel,
-				}
-				allTagActual, _ := p.sci.m.LoadOrStore(hostname, allTagCtx)
-				<-allTagActual.(*Ctx).c.Done()
+				return cpuSQLKnown
+			}
 
-				sql2 += csvSQL + ","
-				cnt2++
+			// wait for allTag data inserted
+			allTagC, allTagCancel := context.WithCancel(context.Background())
+			allTagCtx := &Ctx{
+				c:      allTagC,
+				cancel: allTagCancel,
+			}
+			allTagActual, _ := p.sci.m.LoadOrStore(hostname, allTagCtx)
+			<-allTagActual.(*Ctx).c.Done()
+			return cpuSQLUnknown
+		})
+		rowCnt += batchRows
+
+		if sql1 != "" {
+			_, err := p._db.Connection.Exec(context.Background(), sql1)
+			if err != nil {
+				panic(fmt.Sprintf("kwdb insert data failed!,err :%s", err))
 			}
 		}
-		if cnt1+cnt2 == len(batches.m) {
-			if cnt1 != 0 {
-				sql1 = sql1[:len(sql1)-1]
-				_, err := p._db.Connection.Exec(context.Background(), sql1)
-				if err != nil {
-					panic(fmt.Sprintf("kwdb insert data failed!,err :%s", err))
-				}
-			}
-			if cnt2 != 0 {
-				sql2 = sql2[:len(sql2)-1]
-				_, err2 := p._db.Connection.Exec(context.Background(), sql2)
-				if err2 != nil {
-					panic(fmt.Sprintf("kwdb insert data failed!,err :%s", err2))
-				}
+		if sql2 != "" {
+			_, err := p._db.Connection.Exec(context.Background(), sql2)
+			if err != nil {
+				panic(fmt.Sprintf("kwdb insert data failed!,err :%s", err))
 			}
 		}
 
