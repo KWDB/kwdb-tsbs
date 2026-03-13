@@ -1555,6 +1555,20 @@ func (mrr *MultiResultReader) Close() error {
 	return mrr.err
 }
 
+const kwBatchDecodeQueueSize = 8
+
+type kwBatchDecodeMode uint8
+
+const (
+	kwBatchDecodeModeAsync kwBatchDecodeMode = iota
+	kwBatchDecodeModeSync
+)
+
+type kwBatchDecodeResult struct {
+	batch *pgproto3.KwDataRowBatch
+	err   error
+}
+
 // ResultReader is a reader for the result of a single query.
 type ResultReader struct {
 	pgConn            *PgConn
@@ -1569,8 +1583,17 @@ type ResultReader struct {
 	closed            bool
 	err               error
 
-	kwBatch *pgproto3.KwDataRowBatch
-	kwRow   int
+	kwDecodeMode kwBatchDecodeMode
+	kwBatch      *pgproto3.KwDataRowBatch
+	kwRow        int
+
+	kwRawQueue          chan *pgproto3.KwDataRowBatchRaw
+	kwDecodedQueue      chan kwBatchDecodeResult
+	kwDecodeCancel      chan struct{}
+	kwDecodeStarted     bool
+	kwDecodeInputClosed bool
+	kwDecodeCanceled    bool
+	kwPendingBatches    int
 }
 
 // Result is the saved query response that is returned by calling Read on a ResultReader.
@@ -1607,19 +1630,43 @@ func (rr *ResultReader) Read() *Result {
 
 // NextRow advances the ResultReader to the next row and returns true if a row is available.
 func (rr *ResultReader) NextRow() bool {
-	if rr.kwBatch != nil {
-		if rr.kwRow < len(rr.kwBatch.ValuesTextRows) {
-			rr.rowValues = rr.kwBatch.ValuesTextRows[rr.kwRow]
-			rr.kwRow++
-			return true
-		}
-		rr.kwBatch = nil
-		rr.kwRow = 0
+	if rr.nextRowFromKwBatch() {
+		return true
 	}
 
-	for !rr.commandConcluded {
+	for {
+		if rr.tryDequeueDecodedBatch(false) {
+			return true
+		}
+
+		if rr.err != nil {
+			rr.closeKwDecodeInput()
+			if rr.tryDequeueDecodedBatch(true) {
+				return true
+			}
+
+			rr.shutdownKwDecodeWorker(true)
+			return false
+		}
+
+		if rr.commandConcluded {
+			rr.closeKwDecodeInput()
+			if rr.tryDequeueDecodedBatch(true) {
+				return true
+			}
+
+			if rr.err != nil {
+				rr.shutdownKwDecodeWorker(true)
+				return false
+			}
+
+			rr.shutdownKwDecodeWorker(false)
+			return false
+		}
+
 		msg, err := rr.receiveMessage()
 		if err != nil {
+			rr.shutdownKwDecodeWorker(true)
 			return false
 		}
 
@@ -1629,13 +1676,216 @@ func (rr *ResultReader) NextRow() bool {
 			return true
 
 		case *pgproto3.KwDataRowBatch:
-			rr.kwBatch = msg
-			rr.kwRow = 1
-			rr.rowValues = msg.ValuesTextRows[0]
-			return true
+			if rr.setKwBatch(msg) {
+				return true
+			}
+		case *pgproto3.KwDataRowBatchRaw:
+			if rr.kwDecodeMode == kwBatchDecodeModeSync {
+				if rr.decodeKwRawBatchSync(msg) {
+					return true
+				}
+				rr.shutdownKwDecodeWorker(true)
+				return false
+			}
+
+			rr.ensureKwDecodeWorkerStarted()
+			rr.kwPendingBatches++
+			rr.kwRawQueue <- msg
+
+			if rr.tryDequeueDecodedBatch(false) {
+				return true
+			}
+		}
+
+		if rr.commandConcluded {
+			rr.closeKwDecodeInput()
 		}
 	}
+}
+
+func (rr *ResultReader) nextRowFromKwBatch() bool {
+	if rr.kwBatch == nil {
+		return false
+	}
+
+	if rr.kwRow < len(rr.kwBatch.ValuesTextRows) {
+		rr.rowValues = rr.kwBatch.ValuesTextRows[rr.kwRow]
+		rr.kwRow++
+		return true
+	}
+
+	rr.kwBatch = nil
+	rr.kwRow = 0
 	return false
+}
+
+func (rr *ResultReader) setKwBatch(batch *pgproto3.KwDataRowBatch) bool {
+	if batch == nil || len(batch.ValuesTextRows) == 0 {
+		return false
+	}
+
+	rr.kwBatch = batch
+	rr.kwRow = 1
+	rr.rowValues = batch.ValuesTextRows[0]
+	return true
+}
+
+func decodeKwDataRowBatchRaw(raw *pgproto3.KwDataRowBatchRaw) (*pgproto3.KwDataRowBatch, error) {
+	batch := &pgproto3.KwDataRowBatch{}
+	if err := raw.DecodeInto(batch); err != nil {
+		return nil, err
+	}
+
+	return batch, nil
+}
+
+func runKwDataRowBatchDecodeWorker(input <-chan *pgproto3.KwDataRowBatchRaw, output chan<- kwBatchDecodeResult, cancel <-chan struct{}) {
+	defer close(output)
+
+	var failed bool
+
+	for {
+		select {
+		case <-cancel:
+			return
+		case raw, ok := <-input:
+			if !ok {
+				return
+			}
+
+			if failed {
+				continue
+			}
+
+			batch, err := decodeKwDataRowBatchRaw(raw)
+			result := kwBatchDecodeResult{
+				batch: batch,
+				err:   err,
+			}
+
+			if err != nil {
+				failed = true
+			}
+
+			select {
+			case <-cancel:
+				return
+			case output <- result:
+			}
+		}
+	}
+}
+
+func (rr *ResultReader) ensureKwDecodeWorkerStarted() {
+	if rr.kwDecodeMode != kwBatchDecodeModeAsync || rr.kwDecodeStarted {
+		return
+	}
+
+	rr.kwRawQueue = make(chan *pgproto3.KwDataRowBatchRaw, kwBatchDecodeQueueSize)
+	rr.kwDecodedQueue = make(chan kwBatchDecodeResult, kwBatchDecodeQueueSize)
+	rr.kwDecodeCancel = make(chan struct{})
+	rr.kwDecodeStarted = true
+	rr.kwDecodeInputClosed = false
+	rr.kwDecodeCanceled = false
+
+	go runKwDataRowBatchDecodeWorker(rr.kwRawQueue, rr.kwDecodedQueue, rr.kwDecodeCancel)
+}
+
+func (rr *ResultReader) closeKwDecodeInput() {
+	if !rr.kwDecodeStarted || rr.kwDecodeInputClosed {
+		return
+	}
+
+	close(rr.kwRawQueue)
+	rr.kwDecodeInputClosed = true
+}
+
+func (rr *ResultReader) cancelKwDecodeWorker() {
+	if !rr.kwDecodeStarted || rr.kwDecodeCanceled {
+		return
+	}
+
+	close(rr.kwDecodeCancel)
+	rr.kwDecodeCanceled = true
+}
+
+func (rr *ResultReader) resetKwDecodeState() {
+	rr.kwRawQueue = nil
+	rr.kwDecodedQueue = nil
+	rr.kwDecodeCancel = nil
+	rr.kwDecodeStarted = false
+	rr.kwDecodeInputClosed = false
+	rr.kwDecodeCanceled = false
+	rr.kwPendingBatches = 0
+}
+
+func (rr *ResultReader) shutdownKwDecodeWorker(discardPending bool) {
+	if !rr.kwDecodeStarted {
+		return
+	}
+
+	rr.closeKwDecodeInput()
+	if discardPending {
+		rr.cancelKwDecodeWorker()
+	}
+
+	for range rr.kwDecodedQueue {
+	}
+
+	rr.resetKwDecodeState()
+}
+
+func (rr *ResultReader) tryDequeueDecodedBatch(block bool) bool {
+	if !rr.kwDecodeStarted || rr.kwPendingBatches == 0 {
+		return false
+	}
+
+	var (
+		result kwBatchDecodeResult
+		ok     bool
+	)
+
+	if block {
+		result, ok = <-rr.kwDecodedQueue
+	} else {
+		select {
+		case result, ok = <-rr.kwDecodedQueue:
+		default:
+			return false
+		}
+	}
+
+	if !ok {
+		if rr.kwPendingBatches > 0 && rr.err == nil {
+			rr.concludeCommand(CommandTag{}, errors.New("kw data row decode worker stopped unexpectedly"))
+		}
+		rr.kwPendingBatches = 0
+		return false
+	}
+
+	if rr.kwPendingBatches > 0 {
+		rr.kwPendingBatches--
+	}
+
+	if result.err != nil {
+		rr.kwPendingBatches = 0
+		rr.concludeCommand(CommandTag{}, result.err)
+		rr.cancelKwDecodeWorker()
+		rr.closeKwDecodeInput()
+		return false
+	}
+
+	return rr.setKwBatch(result.batch)
+}
+
+func (rr *ResultReader) decodeKwRawBatchSync(raw *pgproto3.KwDataRowBatchRaw) bool {
+	batch, err := decodeKwDataRowBatchRaw(raw)
+	if err != nil {
+		rr.concludeCommand(CommandTag{}, err)
+		return false
+	}
+
+	return rr.setKwBatch(batch)
 }
 
 // FieldDescriptions returns the field descriptions for the current result set. The returned slice is only valid until
@@ -1657,6 +1907,7 @@ func (rr *ResultReader) Close() (CommandTag, error) {
 		return rr.commandTag, rr.err
 	}
 	rr.closed = true
+	rr.shutdownKwDecodeWorker(true)
 
 	for !rr.commandConcluded {
 		_, err := rr.receiveMessage()
@@ -1698,10 +1949,17 @@ func (rr *ResultReader) readUntilRowDescription() {
 		if _, ok := msg.(*pgproto3.DataRow); ok {
 			return
 		}
+		if _, ok := msg.(*pgproto3.KwDataRowBatch); ok {
+			return
+		}
+		if _, ok := msg.(*pgproto3.KwDataRowBatchRaw); ok {
+			return
+		}
 
 		// Consume the message
 		msg, _ = rr.receiveMessage()
-		if _, ok := msg.(*pgproto3.RowDescription); ok {
+		switch msg.(type) {
+		case *pgproto3.RowDescription, *pgproto3.DataRow, *pgproto3.KwDataRowBatch, *pgproto3.KwDataRowBatchRaw:
 			return
 		}
 	}
@@ -2181,32 +2439,4 @@ func (p *Pipeline) Close() error {
 	p.conn.unlock()
 
 	return p.err
-}
-
-type kwRowChunk struct {
-	// from message header
-	rowNum uint32
-	colNum uint16
-
-	storageLen     []uint32
-	colBlockOffset []uint32
-
-	compressionType int16
-	payload         []byte
-
-	cur uint32 // next row index to emit
-}
-
-func (c *kwRowChunk) ResetFromMsg(m *pgproto3.KwDataRowBatch) {
-	c.rowNum = m.RowNum
-	c.colNum = m.ColNum
-	c.storageLen = m.StorageLen
-	c.colBlockOffset = m.ColBlockOffset
-	c.compressionType = m.CompressionType
-	c.payload = m.Payload
-	c.cur = 0
-}
-
-func (c *kwRowChunk) HasNext() bool {
-	return c.cur < c.rowNum && c.rowNum > 0 && c.colNum > 0
 }
