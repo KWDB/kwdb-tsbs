@@ -11,6 +11,7 @@ import (
 var (
 	KWDBINSERT     = "insert"
 	KWDBPREPARE    = "prepare"
+	KWDBPREPAREEX  = "prepare-ex"
 	KWDBPREPAREIOT = "prepareiot"
 )
 
@@ -70,7 +71,9 @@ func (b *benchmark) GetProcessor() targets.Processor {
 	case KWDBINSERT:
 		return newProcessorInsert(b.opts, b.dbName)
 	case KWDBPREPARE:
-		return newProcessorPrepare(b.opts, b.dbName)
+		return newProcessorPrepare(b.opts, b.dbName, prepareExecModeStandard)
+	case KWDBPREPAREEX:
+		return newProcessorPrepare(b.opts, b.dbName, prepareExecModeExtended)
 	case KWDBPREPAREIOT:
 		return newProcessorPrepareiot(b.opts, b.dbName)
 	default:

@@ -78,32 +78,61 @@ func (*ParameterDescriptionEx) Backend() {}
 // Decode decodes src into dst. src must contain the complete message with the exception of the initial 1 byte message
 // type identifier and 4 byte message length.
 func (dst *ParameterDescriptionEx) Decode(src []byte) error {
-	buf := bytes.NewBuffer(src)
+	if len(src) < 2 {
+		return &invalidMessageFormatErr{messageType: "ParameterDescriptionEx"}
+	}
+	rp := 0
 
-	if buf.Len() < 2 {
+	parameterCount := int(binary.BigEndian.Uint16(src[rp:]))
+	rp += 2
+	if len(src[rp:]) < parameterCount*4+2+2+2 {
 		return &invalidMessageFormatErr{messageType: "ParameterDescriptionEx"}
 	}
 
-	// Instead infer parameter count by remaining size of message
-	parameterCount := binary.BigEndian.Uint16(buf.Next(2))
-
 	*dst = ParameterDescriptionEx{ParameterOIDs: make([]uint32, parameterCount)}
-
-	for i := uint16(0); i < parameterCount; i++ {
-		dst.ParameterOIDs[i] = binary.BigEndian.Uint32(buf.Next(4))
+	for i := 0; i < parameterCount; i++ {
+		dst.ParameterOIDs[i] = binary.BigEndian.Uint32(src[rp:])
+		rp += 4
 	}
 
-	dst.TagIndex = int16(binary.BigEndian.Uint16(buf.Next(2)))
-	ptagCount := binary.BigEndian.Uint16(buf.Next(2))
-	for i := uint16(0); i < ptagCount; i++ {
-		dst.PtagIDs = append(dst.PtagIDs, binary.BigEndian.Uint16(buf.Next(2)))
+	dst.TagIndex = int16(binary.BigEndian.Uint16(src[rp:]))
+	rp += 2
+
+	if len(src[rp:]) < 2 {
+		return &invalidMessageFormatErr{messageType: "ParameterDescriptionEx"}
+	}
+	ptagCount := int(binary.BigEndian.Uint16(src[rp:]))
+	rp += 2
+	if len(src[rp:]) < ptagCount*2+2 {
+		return &invalidMessageFormatErr{messageType: "ParameterDescriptionEx"}
+	}
+	if ptagCount > 0 {
+		dst.PtagIDs = make([]uint16, ptagCount)
+		for i := 0; i < ptagCount; i++ {
+			dst.PtagIDs[i] = binary.BigEndian.Uint16(src[rp:])
+			rp += 2
+		}
 	}
 
-	lenCount := binary.BigEndian.Uint16(buf.Next(2))
-	for i := uint16(0); i < lenCount; i++ {
-		dst.StorageLen = append(dst.StorageLen, binary.BigEndian.Uint32(buf.Next(4)))
+	if len(src[rp:]) < 2 {
+		return &invalidMessageFormatErr{messageType: "ParameterDescriptionEx"}
+	}
+	lenCount := int(binary.BigEndian.Uint16(src[rp:]))
+	rp += 2
+	if len(src[rp:]) < lenCount*4 {
+		return &invalidMessageFormatErr{messageType: "ParameterDescriptionEx"}
+	}
+	if lenCount > 0 {
+		dst.StorageLen = make([]uint32, lenCount)
+		for i := 0; i < lenCount; i++ {
+			dst.StorageLen[i] = binary.BigEndian.Uint32(src[rp:])
+			rp += 4
+		}
 	}
 
+	if rp != len(src) {
+		return &invalidMessageFormatErr{messageType: "ParameterDescriptionEx"}
+	}
 	return nil
 }
 

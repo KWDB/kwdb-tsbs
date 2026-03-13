@@ -835,73 +835,11 @@ readloop:
 }
 
 func (pgConn *PgConn) PrepareEx(ctx context.Context, name, tablename string) (*StatementDescription, error) {
-	if err := pgConn.lock(); err != nil {
-		return nil, err
-	}
-	defer pgConn.unlock()
-
-	if ctx != context.Background() {
-		select {
-		case <-ctx.Done():
-			return nil, newContextAlreadyDoneError(ctx)
-		default:
-		}
-		pgConn.contextWatcher.Watch(ctx)
-		defer pgConn.contextWatcher.Unwatch()
-	}
-	pgConn.frontend.SendParseEx(&pgproto3.ParseEx{Name: name, TableName: tablename})
-	pgConn.frontend.SendDescribe(&pgproto3.Describe{ObjectType: 'S', Name: name})
-	pgConn.frontend.SendSync(&pgproto3.Sync{})
-	err := pgConn.frontend.Flush()
+	kwdbTSDesc, err := pgConn.PrepareKWDBTS(ctx, name, tablename)
 	if err != nil {
-		pgConn.asyncClose()
 		return nil, err
 	}
-	psd := &StatementDescription{Name: name, TableName: tablename}
-
-	var parseErr error
-
-readloop:
-	for {
-		msg, err := pgConn.receiveMessage()
-		if err != nil {
-			pgConn.asyncClose()
-			return nil, normalizeTimeoutError(ctx, err)
-		}
-
-		switch msg := msg.(type) {
-		case *pgproto3.ParameterDescription:
-			psd.ParamOIDs = make([]uint32, len(msg.ParameterOIDs))
-			copy(psd.ParamOIDs, msg.ParameterOIDs)
-		case *pgproto3.RowDescription:
-			psd.Fields = pgConn.convertRowDescription(nil, msg)
-		case *pgproto3.ErrorResponse:
-			parseErr = ErrorResponseToPgError(msg)
-		case *pgproto3.ReadyForQuery:
-			break readloop
-		case *pgproto3.ParameterDescriptionEx:
-			psd.ParamOIDs = make([]uint32, len(msg.ParameterOIDs))
-			copy(psd.ParamOIDs, msg.ParameterOIDs)
-			psd.TagIndex = msg.TagIndex
-			psd.PtagIDs = make([]uint16, len(msg.PtagIDs))
-			copy(psd.PtagIDs, msg.PtagIDs)
-			psd.StorageLen = make([]uint32, len(msg.StorageLen))
-			copy(psd.StorageLen, msg.StorageLen)
-			/*posPtag := 0
-			for i := uint16(psd.TagIndex); i < uint16(len(psd.ParamOIDs)); i++ {
-				if i == psd.PtagIDs[posPtag] {
-					posPtag++
-					continue
-				}
-				psd.OtherTagIDs = append(psd.OtherTagIDs, i)
-			}*/
-		}
-	}
-
-	if parseErr != nil {
-		return nil, parseErr
-	}
-	return psd, nil
+	return kwdbTSDesc.StatementDescription(), nil
 }
 
 // ErrorResponseToPgError converts a wire protocol error message to a *PgError.
@@ -1147,76 +1085,7 @@ func (pgConn *PgConn) ExecPrepared(ctx context.Context, stmtName string, paramVa
 }
 
 func (pgConn *PgConn) ExecPreparedEx(ctx context.Context, stmtName string, sd *StatementDescription, args [][]byte, colCountPerRow int) *ResultReader {
-	result := pgConn.execExtendedPrefix(ctx, args)
-	if result.closed {
-		return result
-	}
-
-	payloads := make(map[string]*pgproto3.PayloadBuffer)
-	var keyBuilder strings.Builder
-	keyBuilder.Grow(64)
-	// transform args to paylaod
-	rowColCount := colCountPerRow
-	maxRowlen := 43 + len(sd.StorageLen)
-	var payload *pgproto3.PayloadBuffer
-	for _, stlen := range sd.StorageLen {
-		maxRowlen += int(stlen)
-	}
-
-	for pos := 0; pos < len(args); {
-		// get per row ptag
-		// by ptag find buffer
-		// buffer including head and tag and body
-		keyBuilder.Reset()
-		for _, ptag := range sd.PtagIDs {
-			keyBuilder.Write(args[pos+int(ptag)])
-		}
-		key := keyBuilder.String()
-		payload = payloads[key]
-		if payload == nil {
-			payloads[key] = pgConn.pool.Get().(*pgproto3.PayloadBuffer)
-			payload = payloads[key]
-		}
-		if (payload.Cap - payload.Tail) < maxRowlen {
-			payload.Extend(4096) // temp 4k extend
-		}
-
-		row := args[pos : pos+rowColCount]
-		payload.FillOneRow(row, sd.ParamOIDs, sd.PtagIDs, sd.TagIndex, sd.StorageLen, 0)
-		payload.RowNum++
-
-		pos += rowColCount
-	}
-
-	// fill header rowNum
-	for _, pd := range payloads {
-		pd.WriteRowNum()
-	}
-
-	pgConn.frontend.SendBindEx(&pgproto3.BindEx{PreparedStatement: stmtName, PtagToPayload: payloads})
-
-	// pgConn.execExtendedSuffix(result)
-	pgConn.frontend.SendSync(&pgproto3.Sync{})
-
-	err := pgConn.frontend.Flush()
-	if err != nil {
-		pgConn.asyncClose()
-		result.concludeCommand(CommandTag{}, err)
-		pgConn.contextWatcher.Unwatch()
-		result.closed = true
-		pgConn.unlock()
-		return nil
-	}
-
-	// recycle
-	for _, pd := range payloads {
-		pd.Reset()
-		pgConn.pool.Put(pd)
-	}
-
-	result.readUntilRowDescription()
-
-	return result
+	return pgConn.ExecPreparedKWDBTS(ctx, stmtName, kwdbTSStatementDescriptionFromStatement(sd), args, colCountPerRow)
 }
 
 func (pgConn *PgConn) execExtendedPrefix(ctx context.Context, paramValues [][]byte) *ResultReader {

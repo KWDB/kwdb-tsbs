@@ -24,7 +24,7 @@ func (t *kwdbTarget) TargetSpecificFlags(flagPrefix string, flagSet *pflag.FlagS
 	flagSet.String(flagPrefix+"host", "", "kwdb host")
 	flagSet.Int(flagPrefix+"port", 26257, "kwdb client Port")
 	flagSet.String(flagPrefix+"dbname", "benchmark", "kwdb db name")
-	flagSet.String(flagPrefix+"insert-type", "9091", "kwdb insert type")
+	flagSet.String(flagPrefix+"insert-type", "9091", "kwdb insert type (insert|prepare|prepare-ex|prepareiot)")
 	flagSet.String(flagPrefix+"case", "cpu-only", "kwdb use-case")
 	flagSet.Int(flagPrefix+"preparesize", 1000, "Prepare batch size ")
 	flagSet.String(flagPrefix+"certdir", "", "Dir of cert files")

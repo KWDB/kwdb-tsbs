@@ -66,6 +66,7 @@ type Conn struct {
 	pgConn             *pgconn.PgConn
 	config             *ConnConfig // config used when establishing this connection
 	preparedStatements map[string]*pgconn.StatementDescription
+	kwdbTSStatements   map[string]*pgconn.KWDBTSStatementDescription
 	statementCache     stmtcache.Cache
 	descriptionCache   stmtcache.Cache
 
@@ -261,6 +262,7 @@ func connect(ctx context.Context, config *ConnConfig) (c *Conn, err error) {
 	}
 
 	c.preparedStatements = make(map[string]*pgconn.StatementDescription)
+	c.kwdbTSStatements = make(map[string]*pgconn.KWDBTSStatementDescription)
 	c.doneChan = make(chan struct{})
 	c.closedChan = make(chan error)
 	c.wbuf = make([]byte, 0, 1024)
@@ -329,21 +331,29 @@ func (c *Conn) Prepare(ctx context.Context, name, sql string) (sd *pgconn.Statem
 	return sd, nil
 }
 
-func (c *Conn) PrepareEx(ctx context.Context, name, sql string) (sd *pgconn.StatementDescription, err error) {
+func (c *Conn) PrepareEx(ctx context.Context, name, tableName string) (sd *pgconn.StatementDescription, err error) {
+	kwdbTSDesc, err := c.PrepareKWDBTS(ctx, name, tableName)
+	if err != nil {
+		return nil, err
+	}
+	return kwdbTSDesc.StatementDescription(), nil
+}
+
+func (c *Conn) PrepareKWDBTS(ctx context.Context, name, tableName string) (sd *pgconn.KWDBTSStatementDescription, err error) {
 	if c.prepareTracer != nil {
-		ctx = c.prepareTracer.TracePrepareStart(ctx, c, TracePrepareStartData{Name: name, SQL: sql})
+		ctx = c.prepareTracer.TracePrepareStart(ctx, c, TracePrepareStartData{Name: name, SQL: tableName})
 	}
 
 	if name != "" {
 		var ok bool
-		if sd, ok = c.preparedStatements[name]; ok {
-			if sd.SQL == sql {
+		if sd, ok = c.kwdbTSStatements[name]; ok {
+			if sd.TableName == tableName {
 				if c.prepareTracer != nil {
 					c.prepareTracer.TracePrepareEnd(ctx, c, TracePrepareEndData{AlreadyPrepared: true})
 				}
 				return sd, nil
 			}
-			panic(fmt.Sprintf("prepare le repeat table %s", name))
+			panic(fmt.Sprintf("prepare the repeat KWDB TS table %s", name))
 		}
 	}
 
@@ -353,13 +363,13 @@ func (c *Conn) PrepareEx(ctx context.Context, name, sql string) (sd *pgconn.Stat
 		}()
 	}
 
-	sd, err = c.pgConn.PrepareEx(ctx, name, sql)
+	sd, err = c.pgConn.PrepareKWDBTS(ctx, name, tableName)
 	if err != nil {
 		return nil, err
 	}
 
 	if name != "" {
-		c.preparedStatements[name] = sd
+		c.kwdbTSStatements[name] = sd
 	}
 
 	return sd, nil
@@ -368,6 +378,7 @@ func (c *Conn) PrepareEx(ctx context.Context, name, sql string) (sd *pgconn.Stat
 // Deallocate released a prepared statement
 func (c *Conn) Deallocate(ctx context.Context, name string) error {
 	delete(c.preparedStatements, name)
+	delete(c.kwdbTSStatements, name)
 	_, err := c.pgConn.Exec(ctx, "deallocate "+quoteIdentifier(name)).ReadAll()
 	return err
 }
@@ -375,6 +386,7 @@ func (c *Conn) Deallocate(ctx context.Context, name string) error {
 // DeallocateAll releases all previously prepared statements from the server and client, where it also resets the statement and description cache.
 func (c *Conn) DeallocateAll(ctx context.Context) error {
 	c.preparedStatements = map[string]*pgconn.StatementDescription{}
+	c.kwdbTSStatements = map[string]*pgconn.KWDBTSStatementDescription{}
 	if c.config.StatementCacheCapacity > 0 {
 		c.statementCache = stmtcache.NewLRUCache(c.config.StatementCacheCapacity)
 	}

@@ -36,7 +36,6 @@ func (fa *fixedArgList) Init() {
 }
 
 func (fa *fixedArgList) Reset() {
-	// fa.args = fa.args[:0]
 	fa.writePos = 0
 }
 
@@ -58,30 +57,36 @@ func (fa *fixedArgList) Length() int {
 	return fa.writePos
 }
 
+type prepareExecMode uint8
+
+const (
+	prepareExecModeStandard prepareExecMode = iota
+	prepareExecModeExtended
+)
+
 type prepareProcessor struct {
 	opts        *LoadingOptions
 	dbName      string
 	sci         *syncCSI
 	_db         *commonpool.Conn
 	deviceNum   int
-	preparedSql map[string]struct{}
-	prepareStmt strings.Builder
-	workerIndex int
+	mode        prepareExecMode
+	preparedSQL map[string]struct{}
+	tsLayouts   map[string]*pgconn.KWDBTSStatementDescription
 
-	// prepare buff
-	buffer     map[string]*fixedArgList // tableName, fixedArgList
+	buffer     map[string]*fixedArgList // tableName -> fixedArgList
 	buffInited bool
 	formatBuf  []int16
-
-	sd *pgconn.StatementDescription
 }
 
-func newProcessorPrepare(opts *LoadingOptions, dbName string) *prepareProcessor {
+func newProcessorPrepare(opts *LoadingOptions, dbName string, mode prepareExecMode) *prepareProcessor {
 	return &prepareProcessor{
 		opts:        opts,
 		dbName:      dbName,
 		sci:         globalSCI,
-		preparedSql: make(map[string]struct{}),
+		mode:        mode,
+		preparedSQL: make(map[string]struct{}),
+		tsLayouts:   make(map[string]*pgconn.KWDBTSStatementDescription),
 		buffer:      make(map[string]*fixedArgList),
 		formatBuf:   make([]int16, opts.Preparesize*12),
 	}
@@ -92,21 +97,6 @@ func (p *prepareProcessor) Init(workerNum int, doLoad, _ bool) {
 		return
 	}
 
-	p.prepareStmt.Grow(Size1M)
-
-	for i := 0; i < p.opts.Preparesize; i++ {
-		p.prepareStmt.WriteString(fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
-			i*12+1, i*12+2, i*12+3, i*12+4, i*12+5, i*12+6, i*12+7, i*12+8, i*12+9, i*12+10, i*12+11,
-			i*12+12))
-		if i == p.opts.Preparesize-1 {
-			p.prepareStmt.WriteString(";")
-		} else {
-			p.prepareStmt.WriteString(",")
-		}
-	}
-
-	p.workerIndex = workerNum
-
 	var err error
 	p._db, err = commonpool.GetConnection(p.opts.User, p.opts.Pass, p.opts.Host, p.opts.CertDir, p.opts.Port)
 	if err != nil {
@@ -116,6 +106,7 @@ func (p *prepareProcessor) Init(workerNum int, doLoad, _ bool) {
 	for i := 0; i < p.opts.Preparesize*12; i++ {
 		p.formatBuf[i] = 1
 	}
+	_ = workerNum
 }
 
 func (p *prepareProcessor) ProcessBatch(b targets.Batch, doLoad bool) (metricCount, rowCount uint64) {
@@ -129,7 +120,6 @@ func (p *prepareProcessor) ProcessBatch(b targets.Batch, doLoad bool) (metricCou
 		return metricCnt, rowCnt
 	}
 
-	// create table
 	var deviceNums int
 	if p.opts.DoCreate && len(batches.createSql) != 0 {
 		p.deviceNum = len(batches.createSql)
@@ -137,14 +127,10 @@ func (p *prepareProcessor) ProcessBatch(b targets.Batch, doLoad bool) (metricCou
 			p.deviceNum--
 		}
 		deviceNums = p.createDeviceAndAttribute(batches.createSql)
-	} else {
-		deviceNums = 0
 	}
 
-	// init buffer for every table
 	if !p.buffInited {
-		_, ok := p.buffer["cpu"]
-		if !ok {
+		if _, ok := p.buffer["cpu"]; !ok {
 			buffer := newFixedArgList(p.opts.Preparesize * 12)
 			buffer.Init()
 			p.buffer["cpu"] = buffer
@@ -152,50 +138,18 @@ func (p *prepareProcessor) ProcessBatch(b targets.Batch, doLoad bool) (metricCou
 		p.buffInited = true
 	}
 	tableBuffer := p.buffer["cpu"]
-	_, cpuPrepared := p.preparedSql["cpu"]
 
-	// join args and execute
 	for _, args := range batches.m {
 		rowCnt += uint64(len(args))
 		for _, s := range args {
 			s = s[1 : len(s)-1]
 			p.parseCPURowIntoBuffer(s, tableBuffer)
-
-			/*if p.sd != nil && p.sd.ParamOIDs != nil {
-				nvalCount := len(values)
-				rowNeedCount := len(p.sd.ParamOIDs)
-				for ; rowNeedCount > nvalCount; nvalCount++ {
-					// fill nill other tag for cpu all field
-					tableBuffer.Append(nil)
-				}
-			}*/
-
-			// check buffer is full
 			if tableBuffer.Length() == tableBuffer.Capacity() {
-				// init prepareStmt
-				if !cpuPrepared {
-					p.createPrepareSql("cpu")
-					p.preparedSql["cpu"] = struct{}{}
-					/*if p.sd != nil && p.sd.ParamOIDs != nil {
-						nvalCount := len(values)
-						rowNeedCount := len(p.sd.ParamOIDs)
-						for ; rowNeedCount > nvalCount; nvalCount++ {
-							// fill nill other tag for cpu all field
-							tableBuffer.Append(nil)
-						}
-					}*/
-					cpuPrepared = true
-				}
-
-				//p.execPrepareStmt("cpu", tableBuffer.args)
-				p.execPrepareStmtEx("cpu", tableBuffer.args, 12)
-				// reuse buffer: reset tableBuffer's write position
-				tableBuffer.Reset()
+				p.flushTableBuffer("cpu", tableBuffer, 12)
 			}
 		}
 	}
 
-	// batches.Reset()
 	return metricCnt + uint64(deviceNums)*20, rowCnt + uint64(deviceNums)
 }
 
@@ -248,15 +202,18 @@ func (p *prepareProcessor) parseCPURowIntoBuffer(s string, tableBuffer *fixedArg
 
 func (p *prepareProcessor) Close(doLoad bool) {
 	if doLoad {
+		if tableBuffer, ok := p.buffer["cpu"]; ok {
+			p.flushTableBuffer("cpu", tableBuffer, 12)
+		}
 		p._db.Put()
 	}
 }
 
 func (p *prepareProcessor) createDeviceAndAttribute(createSql []*point) int {
-	var deviceNums int = 0
+	var deviceNums int
 	sql := fmt.Sprintf("insert into %s.cpu (hostname,region,datacenter,rack,os,arch ,team,service,service_version,service_environment) values", p.dbName)
 	for _, row := range createSql {
-		deviceNums += 1
+		deviceNums++
 		switch row.sqlType {
 		case CreateTemplateTable:
 			c, cancel := context.WithCancel(context.Background())
@@ -277,8 +234,6 @@ func (p *prepareProcessor) createDeviceAndAttribute(createSql []*point) int {
 			actual.(*Ctx).cancel()
 		case CreateTable:
 			sql += row.sql + ","
-			continue
-
 		default:
 			panic("impossible")
 		}
@@ -294,28 +249,99 @@ func (p *prepareProcessor) createDeviceAndAttribute(createSql []*point) int {
 	return deviceNums
 }
 
-func (p *prepareProcessor) createPrepareSql(deviecName string) {
-	var insertsql strings.Builder
-	query := fmt.Sprintf("insert into %s.cpu (k_timestamp,usage_user,usage_system,usage_idle,usage_nice,usage_iowait,usage_irq,usage_softirq,usage_steal,usage_guest,usage_guest_nice,hostname) values ", p.opts.DBName)
-	insertsql.WriteString(query)
-	sql := insertsql.String() + p.prepareStmt.String()
-	// _, err1 := p._db.Connection.Prepare(context.Background(), "insertall"+deviecName, sql)
-	var err1 error
-	p.sd, err1 = p._db.Connection.PrepareEx(context.Background(), "insertall"+deviecName, "benchmark.public.cpu")
-	if err1 != nil {
-		panic(fmt.Sprintf("kwdb Prepare failed,err :%s, sql :%s", err1, sql))
+func (p *prepareProcessor) flushTableBuffer(tableName string, tableBuffer *fixedArgList, colCountPerRow int) {
+	if tableBuffer.Length() == 0 {
+		return
+	}
+	if tableBuffer.Length()%colCountPerRow != 0 {
+		panic(fmt.Sprintf("kwdb invalid buffered row width: len=%d colCountPerRow=%d", tableBuffer.Length(), colCountPerRow))
+	}
+
+	rowCount := tableBuffer.Length() / colCountPerRow
+	args := tableBuffer.args[:tableBuffer.Length()]
+	p.ensurePrepared(tableName, rowCount)
+
+	switch p.mode {
+	case prepareExecModeStandard:
+		p.execPrepareStmt(tableName, rowCount, args)
+	case prepareExecModeExtended:
+		p.execPrepareStmtEx(tableName, args, colCountPerRow)
+	default:
+		panic(fmt.Sprintf("unknown prepare exec mode %d", p.mode))
+	}
+
+	tableBuffer.Reset()
+}
+
+func (p *prepareProcessor) ensurePrepared(tableName string, rowCount int) {
+	switch p.mode {
+	case prepareExecModeStandard:
+		stmtName := p.standardStmtName(tableName, rowCount)
+		if _, ok := p.preparedSQL[stmtName]; ok {
+			return
+		}
+		sql := p.buildPrepareSQL(tableName, rowCount)
+		if _, err := p._db.Connection.Prepare(context.Background(), stmtName, sql); err != nil {
+			panic(fmt.Sprintf("kwdb Prepare failed,err :%s, sql :%s", err, sql))
+		}
+		p.preparedSQL[stmtName] = struct{}{}
+	case prepareExecModeExtended:
+		if _, ok := p.tsLayouts[tableName]; ok {
+			return
+		}
+		layout, err := p._db.Connection.PrepareKWDBTS(context.Background(), p.extendedStmtName(tableName), p.kwdbTableName(tableName))
+		if err != nil {
+			panic(fmt.Sprintf("kwdb PrepareKWDBTS failed,err :%s, table :%s", err, p.kwdbTableName(tableName)))
+		}
+		p.tsLayouts[tableName] = layout
+	default:
+		panic(fmt.Sprintf("unknown prepare exec mode %d", p.mode))
 	}
 }
 
-func (p *prepareProcessor) execPrepareStmt(tableName string, args [][]byte) {
-	res := p._db.Connection.PgConn().ExecPrepared(context.Background(), "insertall"+tableName, args, p.formatBuf, nil).Read()
+func (p *prepareProcessor) standardStmtName(tableName string, rowCount int) string {
+	return fmt.Sprintf("insertall%s_%d", tableName, rowCount)
+}
+
+func (p *prepareProcessor) extendedStmtName(tableName string) string {
+	return fmt.Sprintf("insertall%s_ts", tableName)
+}
+
+func (p *prepareProcessor) kwdbTableName(tableName string) string {
+	return fmt.Sprintf("%s.public.%s", p.opts.DBName, tableName)
+}
+
+func (p *prepareProcessor) buildPrepareSQL(tableName string, rowCount int) string {
+	if tableName != "cpu" {
+		panic(fmt.Sprintf("unsupported prepare table %s", tableName))
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "insert into %s.cpu (k_timestamp,usage_user,usage_system,usage_idle,usage_nice,usage_iowait,usage_irq,usage_softirq,usage_steal,usage_guest,usage_guest_nice,hostname) values ", p.opts.DBName)
+	for i := 0; i < rowCount; i++ {
+		fmt.Fprintf(&b, "($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+			i*12+1, i*12+2, i*12+3, i*12+4, i*12+5, i*12+6,
+			i*12+7, i*12+8, i*12+9, i*12+10, i*12+11, i*12+12)
+		if i == rowCount-1 {
+			b.WriteByte(';')
+		} else {
+			b.WriteByte(',')
+		}
+	}
+	return b.String()
+}
+
+func (p *prepareProcessor) execPrepareStmt(tableName string, rowCount int, args [][]byte) {
+	stmtName := p.standardStmtName(tableName, rowCount)
+	res := p._db.Connection.PgConn().ExecPrepared(context.Background(), stmtName, args, p.formatBuf[:len(args)], nil).Read()
 	if res.Err != nil {
 		panic(res.Err)
 	}
 }
 
 func (p *prepareProcessor) execPrepareStmtEx(tableName string, args [][]byte, colCountPerRow int) {
-	res := p._db.Connection.PgConn().ExecPreparedEx(context.Background(), "insertall"+tableName, p.sd, args, colCountPerRow).Read()
+	layout := p.tsLayouts[tableName]
+	res := p._db.Connection.PgConn().ExecPreparedKWDBTS(context.Background(), p.extendedStmtName(tableName), layout, args, colCountPerRow).Read()
 	if res.Err != nil {
 		panic(res.Err)
 	}
