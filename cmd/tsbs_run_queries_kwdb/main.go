@@ -23,6 +23,7 @@ var (
 	port      int
 	runner    *query.BenchmarkRunner
 	prepare   bool
+	compress  string
 )
 
 func init() {
@@ -49,6 +50,7 @@ func init() {
 	certdir = viper.GetString("certdir")
 	querytype = viper.GetString("query-type")
 	prepare = viper.GetBool("prepare")
+	compress = viper.GetString("compress")
 	port = viper.GetInt("port")
 	runner = query.NewBenchmarkRunner(config)
 }
@@ -86,6 +88,9 @@ func (p *processor) Init(workerNum int) {
 	if err != nil {
 		//	panic(err)
 	}
+	if err := p.setSessionCompress(ctx); err != nil {
+		panic(err)
+	}
 	if prepare {
 		// 查询模板初始化
 		p.Initquery(querytype)
@@ -121,7 +126,12 @@ func (p *processor) ProcessQuery(q query.Query, prepare bool) ([]*query.Stat, er
 				return nil, err
 			}
 
-			rows.Close()
+			for rows.Next() {
+			}
+			if err := rows.Err(); err != nil {
+				log.Println("Error reading query result: '", querys[i], "'")
+				return nil, err
+			}
 		} else {
 			fmt.Println(querys)
 
@@ -142,3 +152,14 @@ func (p *processor) ProcessQuery(q query.Query, prepare bool) ([]*query.Stat, er
 }
 
 func newProcessor() query.Processor { return &processor{} }
+
+func (p *processor) setSessionCompress(ctx context.Context) error {
+	switch compress {
+	case "off", "lz4_compress", "snappy_compress":
+		query := fmt.Sprintf("set pg_extend_compress = '%s';", compress)
+		_, err := p.db.Connection.Exec(ctx, query)
+		return err
+	default:
+		return fmt.Errorf("set pg_extend_compress error")
+	}
+}
