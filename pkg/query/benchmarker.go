@@ -58,6 +58,7 @@ func (c BenchmarkRunnerConfig) AddToFlagSet(fs *pflag.FlagSet) {
 	fs.String("results-file", "", "Write the test results summary json to this file")
 	fs.String("query-type", "", "")
 	fs.Bool("prepare", false, "")
+	fs.String("compress", "off", "")
 }
 
 // BenchmarkRunner contains the common components for running a query benchmarking
