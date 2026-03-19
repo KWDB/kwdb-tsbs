@@ -23,6 +23,7 @@ var (
 	port      int
 	runner    *query.BenchmarkRunner
 	prepare   bool
+	compress  string
 )
 
 func init() {
@@ -49,6 +50,7 @@ func init() {
 	certdir = viper.GetString("certdir")
 	querytype = viper.GetString("query-type")
 	prepare = viper.GetBool("prepare")
+	compress = viper.GetString("compress")
 	port = viper.GetInt("port")
 	runner = query.NewBenchmarkRunner(config)
 }
@@ -112,6 +114,18 @@ func (p *processor) ProcessQuery(q query.Query, prepare bool) ([]*query.Stat, er
 	querys := strings.Split(qry, ";")
 	ctx := context.Background()
 
+	switch compress {
+	case "off":
+		break
+	case "lz4_compress", "snappy_compress":
+		query := fmt.Sprintf("set pg_extend_compress = %s;", compress)
+		_, err := p.db.Connection.Exec(ctx, query)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("set pg_extend_compress error")
+	}
 	for i := 0; i < len(querys); i++ {
 		if !prepare {
 			fmt.Println(querys[i])
