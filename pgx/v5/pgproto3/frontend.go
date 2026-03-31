@@ -8,6 +8,11 @@ import (
 	"io"
 )
 
+const (
+	frontendDefaultWBufCap = 128 * 1024
+	frontendMaxRetainedCap = 256 * 1024
+)
+
 // Frontend acts as a client for the PostgreSQL wire protocol version 3.
 type Frontend struct {
 	cr *chunkReader
@@ -64,7 +69,13 @@ type Frontend struct {
 func NewFrontend(r io.Reader, w io.Writer) *Frontend {
 	cr := newChunkReader(r, 0)
 	aEParameter := NewAEParameter()
-	return &Frontend{cr: cr, w: w, aEParameter: *aEParameter}
+	return &Frontend{
+
+		cr:          cr,
+		w:           w,
+		aEParameter: *aEParameter,
+		wbuf:        make([]byte, 0, frontendDefaultWBufCap),
+	}
 }
 
 // Send sends a message to the backend (i.e. the server). The message is not guaranteed to be written until Flush is
@@ -90,9 +101,8 @@ func (f *Frontend) Flush() error {
 
 	n, err := f.w.Write(f.wbuf)
 
-	const maxLen = 1024
-	if len(f.wbuf) > maxLen {
-		f.wbuf = make([]byte, 0, maxLen)
+	if cap(f.wbuf) > frontendMaxRetainedCap {
+		f.wbuf = make([]byte, 0, frontendDefaultWBufCap)
 	} else {
 		f.wbuf = f.wbuf[:0]
 	}
