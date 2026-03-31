@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/silenceper/pool"
 	"github.com/timescale/tsbs/pkg/targets/kwdb/thread"
 	"sync"
@@ -90,6 +91,22 @@ var connectionMap = sync.Map{}
 type Conn struct {
 	Connection *pgx.Conn
 	pool       *ConnectorPool
+}
+
+func (c *Conn) Exec(ctx context.Context, sql string) error {
+	_, err := c.Connection.Exec(ctx, sql)
+	return err
+}
+
+func (c *Conn) PrepareStatement(ctx context.Context, name, sql string) (*pgconn.StatementDescription, error) {
+	return c.Connection.Prepare(ctx, name, sql)
+}
+
+func (c *Conn) ExecPreparedStatement(
+	ctx context.Context, stmtName string, args [][]byte, paramFormats []int16, resultFormats []int16,
+) error {
+	res := c.Connection.PgConn().ExecPrepared(ctx, stmtName, args, paramFormats, resultFormats).Read()
+	return res.Err
 }
 
 func (c *Conn) Put() error {
