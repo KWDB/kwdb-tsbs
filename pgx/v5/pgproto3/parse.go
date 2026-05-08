@@ -140,7 +140,7 @@ func (src ParseEx) MarshalJSON() ([]byte, error) {
 		Name      string
 		TableName string
 	}{
-		Type:      "Parse",
+		Type:      "ParseEx",
 		Name:      src.Name,
 		TableName: src.TableName,
 	})

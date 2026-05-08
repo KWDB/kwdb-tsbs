@@ -1182,7 +1182,13 @@ func (pgConn *PgConn) ExecPreparedEx(ctx context.Context, stmtName string, sd *S
 		}
 
 		row := args[pos : pos+rowColCount]
-		payload.FillOneRow(row, sd.ParamOIDs, sd.PtagIDs, sd.TagIndex, sd.StorageLen, 0)
+		if err := payload.FillOneRow(row, sd.ParamOIDs, sd.PtagIDs, sd.TagIndex, sd.StorageLen, 0); err != nil {
+			result.concludeCommand(CommandTag{}, err)
+			result.closed = true
+			pgConn.contextWatcher.Unwatch()
+			pgConn.unlock()
+			return result
+		}
 		payload.RowNum++
 
 		pos += rowColCount

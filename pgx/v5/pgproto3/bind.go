@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"github.com/jackc/pgx/v5/internal/pgio"
 	"github.com/jackc/pgx/v5/pgtype"
-	"math"
 	"strconv"
 	"time"
 )
@@ -370,11 +369,11 @@ func FillColData(oid uint32, val []byte, dst []byte, storelen uint32, dstVarStar
 		binary.LittleEndian.PutUint64(dst, uint64(tum))
 		return 8, 0, nil
 	case pgtype.Int4OID:
-		num := binary.BigEndian.Uint64(val)
-		if num > uint64(math.MaxInt32) || int64(num) < int64(math.MinInt32) {
-			return -1, -1, strconv.ErrRange
-		}
-		binary.LittleEndian.PutUint32(dst, uint32(num))
+		num := binary.BigEndian.Uint32(val)
+		//if num > math.MaxInt32 || num < math.MinInt32 {
+		//	return -1, -1, strconv.ErrRange
+		//}
+		binary.LittleEndian.PutUint32(dst, num)
 		return 4, 0, nil
 	case pgtype.BPCharOID:
 		copy(dst, val)
