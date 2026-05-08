@@ -9,9 +9,10 @@ import (
 )
 
 var (
-	KWDBINSERT     = "insert"
-	KWDBPREPARE    = "prepare"
-	KWDBPREPAREIOT = "prepareiot"
+	KWDBINSERT        = "insert"
+	KWDBPREPARE       = "prepare"
+	KWDBPREPAREEXTEND = "prepare-extend"
+	KWDBPREPAREIOT    = "prepareiot"
 )
 
 func NewBenchmark(dbName string, opts *LoadingOptions, dataSourceConfig *source.DataSourceConfig) (targets.Benchmark, error) {
@@ -70,6 +71,8 @@ func (b *benchmark) GetProcessor() targets.Processor {
 	case KWDBINSERT:
 		return newProcessorInsert(b.opts, b.dbName)
 	case KWDBPREPARE:
+		return newProcessorPrepare(b.opts, b.dbName)
+	case KWDBPREPAREEXTEND:
 		return newProcessorPrepare(b.opts, b.dbName)
 	case KWDBPREPAREIOT:
 		return newProcessorPrepareiot(b.opts, b.dbName)

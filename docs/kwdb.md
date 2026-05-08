@@ -87,7 +87,7 @@ Hostname of the kwdb server.
 Port of the kwdb server.
 
 #### `-insert-type` (type: `string`)
-Optional as `insert, prepare, prepareiot`
+Optional as `insert, prepare, prepare-extend, prepareiot`
 
 Note: The correspondence between case and insert-type is as follows:
 
@@ -95,6 +95,7 @@ Note: The correspondence between case and insert-type is as follows:
 |----------|-------------|
 | cpu-only | insert      |
 | cpu-only | prepare     |
+| cpu-only | prepare-extend |
 | IoT      | insert      |
 | IoT      | prepareiot  |
 

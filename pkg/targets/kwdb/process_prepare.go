@@ -87,6 +87,10 @@ func newProcessorPrepare(opts *LoadingOptions, dbName string) *prepareProcessor 
 	}
 }
 
+func (p *prepareProcessor) useExtend() bool {
+	return p.opts.Type == KWDBPREPAREEXTEND
+}
+
 func (p *prepareProcessor) Init(workerNum int, doLoad, _ bool) {
 	if !doLoad {
 		return
@@ -187,8 +191,12 @@ func (p *prepareProcessor) ProcessBatch(b targets.Batch, doLoad bool) (metricCou
 					cpuPrepared = true
 				}
 
-				//p.execPrepareStmt("cpu", tableBuffer.args)
-				p.execPrepareStmtEx("cpu", tableBuffer.args, 12)
+				if p.useExtend() {
+					p.execPrepareStmtEx("cpu", tableBuffer.args, 12)
+				} else {
+					p.execPrepareStmt("cpu", tableBuffer.args)
+				}
+
 				// reuse buffer: reset tableBuffer's write position
 				tableBuffer.Reset()
 			}
@@ -299,9 +307,14 @@ func (p *prepareProcessor) createPrepareSql(deviecName string) {
 	query := fmt.Sprintf("insert into %s.cpu (k_timestamp,usage_user,usage_system,usage_idle,usage_nice,usage_iowait,usage_irq,usage_softirq,usage_steal,usage_guest,usage_guest_nice,hostname) values ", p.opts.DBName)
 	insertsql.WriteString(query)
 	sql := insertsql.String() + p.prepareStmt.String()
-	// _, err1 := p._db.Connection.Prepare(context.Background(), "insertall"+deviecName, sql)
 	var err1 error
-	p.sd, err1 = p._db.Connection.PrepareEx(context.Background(), "insertall"+deviecName, "benchmark.public.cpu")
+
+	if p.useExtend() {
+		p.sd, err1 = p._db.Connection.PrepareEx(context.Background(), "insertall"+deviecName, "benchmark.public.cpu")
+	} else {
+		_, err1 = p._db.Connection.Prepare(context.Background(), "insertall"+deviecName, sql)
+	}
+
 	if err1 != nil {
 		panic(fmt.Sprintf("kwdb Prepare failed,err :%s, sql :%s", err1, sql))
 	}

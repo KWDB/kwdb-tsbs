@@ -260,7 +260,7 @@ func (s *ExecutionService) ExecuteLoadData(ctx context.Context, taskID string, i
 		"--case=" + input.Case,
 	}
 
-	if input.InsertType == "prepare" || input.InsertType == "prepareiot" {
+	if input.InsertType == "prepare" || input.InsertType == "prepare-extend" || input.InsertType == "prepareiot" {
 		if input.Preparesize != nil {
 			args = append(args, fmt.Sprintf("--preparesize=%d", *input.Preparesize))
 		} else if input.BatchSize != nil {

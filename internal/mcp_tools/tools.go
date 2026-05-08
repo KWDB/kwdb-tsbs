@@ -107,8 +107,8 @@ func RegisterTools(
 				},
 				"insert_type": map[string]interface{}{
 					"type":        "string",
-					"description": "Insert type. Must be one of: 'insert' (regular insert), 'prepare' (prepared statement), 'prepareiot' (IoT prepared). Default: 'insert'",
-					"enum":        []string{"insert", "prepare", "prepareiot"},
+					"description": "Insert type. Must be one of: 'insert' (regular insert), 'prepare' (prepared statement), 'prepare-extend' (prepared statement with extended execution), 'prepareiot' (IoT prepared). Default: 'insert'",
+					"enum":        []string{"insert", "prepare", "prepare-extend", "prepareiot"},
 					"default":     "insert",
 				},
 				"case": map[string]interface{}{
@@ -121,7 +121,7 @@ func RegisterTools(
 				},
 				"preparesize": map[string]interface{}{
 					"type":        "integer",
-					"description": "Prepared statement size (optional). Only used for prepare and prepareiot insert types.",
+					"description": "Prepared statement size (optional). Only used for prepare, prepare-extend, and prepareiot insert types.",
 				},
 				"workers": map[string]interface{}{
 					"type":        "integer",
@@ -703,15 +703,16 @@ func handleLoadData(
 		input.InsertType = "insert"
 	} else {
 		validTypes := map[string]bool{
-			"insert":     true,
-			"prepare":    true,
-			"prepareiot": true,
+			"insert":         true,
+			"prepare":        true,
+			"prepare-extend": true,
+			"prepareiot":     true,
 		}
 		if !validTypes[input.InsertType] {
 			return nil, LoadDataOutput{
 				TaskID:  "",
 				Status:  "error",
-				Message: fmt.Sprintf("参数验证失败: invalid insert_type: %s, must be one of: insert, prepare, prepareiot", input.InsertType),
+				Message: fmt.Sprintf("参数验证失败: invalid insert_type: %s, must be one of: insert, prepare, prepare-extend, prepareiot", input.InsertType),
 			}, nil
 		}
 	}

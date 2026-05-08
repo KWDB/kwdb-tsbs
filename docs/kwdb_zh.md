@@ -85,7 +85,7 @@ KWDB 服务器地址。
 KWDB 服务器端口。
 
 #### `-insert-type` （类型：`string`）
-可选值：insert、prepare 或 prepareiot。
+可选值：insert、prepare、prepare-extend 或 prepareiot。
 
 注：case 与 insert-type 的对应关系如下：
 
@@ -93,6 +93,7 @@ KWDB 服务器端口。
 |----------|-------------|
 | cpu-only | insert      |
 | cpu-only | prepare     |
+| cpu-only | prepare-extend |
 | IoT      | insert      |
 | IoT      | prepareiot  |
 
