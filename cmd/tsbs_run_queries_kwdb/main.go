@@ -114,8 +114,8 @@ func (p *processor) ProcessQuery(q query.Query, prepare bool) ([]*query.Stat, er
 	querys := strings.Split(qry, ";")
 	ctx := context.Background()
 
-	query := fmt.Sprintf("set pg_extend_compress = snappy_compress;")
-	_, err := p.db.Connection.Exec(ctx, query)
+	set := fmt.Sprintf("set pg_extend_compress = snappy_compress;")
+	_, err := p.db.Connection.Exec(ctx, set)
 	if err != nil {
 		return nil, err
 	}
