@@ -135,6 +135,10 @@ func (p *processor) ProcessQuery(q query.Query, prepare bool) ([]*query.Stat, er
 				return nil, err
 			}
 
+			for rows.Next() {
+
+			}
+
 			rows.Close()
 		} else {
 			fmt.Println(querys)
