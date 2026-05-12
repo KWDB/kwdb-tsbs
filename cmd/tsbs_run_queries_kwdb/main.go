@@ -114,17 +114,10 @@ func (p *processor) ProcessQuery(q query.Query, prepare bool) ([]*query.Stat, er
 	querys := strings.Split(qry, ";")
 	ctx := context.Background()
 
-	switch compress {
-	case "off":
-		break
-	case "lz4_compress", "snappy_compress":
-		query := fmt.Sprintf("set pg_extend_compress = %s;", compress)
-		_, err := p.db.Connection.Exec(ctx, query)
-		if err != nil {
-			return nil, err
-		}
-	default:
-		return nil, fmt.Errorf("set pg_extend_compress error")
+	query := fmt.Sprintf("set pg_extend_compress = snappy_compress;")
+	_, err := p.db.Connection.Exec(ctx, query)
+	if err != nil {
+		return nil, err
 	}
 	for i := 0; i < len(querys); i++ {
 		if !prepare {
