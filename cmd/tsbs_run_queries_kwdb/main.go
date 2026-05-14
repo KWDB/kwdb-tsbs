@@ -50,7 +50,8 @@ func init() {
 	certdir = viper.GetString("certdir")
 	querytype = viper.GetString("query-type")
 	prepare = viper.GetBool("prepare")
-	compress = viper.GetString("compress")
+	compress = "snappy_compress"
+	//compress = viper.GetString("compress")
 	port = viper.GetInt("port")
 	runner = query.NewBenchmarkRunner(config)
 }
