@@ -88,6 +88,9 @@ func (p *processor) Init(workerNum int) {
 	if err != nil {
 		//	panic(err)
 	}
+	if err := p.setSessionCompress(ctx); err != nil {
+		panic(err)
+	}
 	if prepare {
 		// 查询模板初始化
 		p.Initquery(querytype)
@@ -114,18 +117,6 @@ func (p *processor) ProcessQuery(q query.Query, prepare bool) ([]*query.Stat, er
 	querys := strings.Split(qry, ";")
 	ctx := context.Background()
 
-	switch compress {
-	case "off":
-		break
-	case "lz4_compress", "snappy_compress":
-		query := fmt.Sprintf("set pg_extend_compress = %s;", compress)
-		_, err := p.db.Connection.Exec(ctx, query)
-		if err != nil {
-			return nil, err
-		}
-	default:
-		return nil, fmt.Errorf("set pg_extend_compress error")
-	}
 	for i := 0; i < len(querys); i++ {
 		if !prepare {
 			fmt.Println(querys[i])
@@ -135,7 +126,12 @@ func (p *processor) ProcessQuery(q query.Query, prepare bool) ([]*query.Stat, er
 				return nil, err
 			}
 
-			rows.Close()
+			for rows.Next() {
+			}
+			if err := rows.Err(); err != nil {
+				log.Println("Error reading query result: '", querys[i], "'")
+				return nil, err
+			}
 		} else {
 			fmt.Println(querys)
 
@@ -156,3 +152,14 @@ func (p *processor) ProcessQuery(q query.Query, prepare bool) ([]*query.Stat, er
 }
 
 func newProcessor() query.Processor { return &processor{} }
+
+func (p *processor) setSessionCompress(ctx context.Context) error {
+	switch compress {
+	case "off", "lz4_compress", "snappy_compress":
+		query := fmt.Sprintf("set pg_extend_compress = '%s';", compress)
+		_, err := p.db.Connection.Exec(ctx, query)
+		return err
+	default:
+		return fmt.Errorf("set pg_extend_compress error")
+	}
+}

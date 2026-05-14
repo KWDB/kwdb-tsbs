@@ -83,7 +83,8 @@ const (
 
 	sizeStorageLen     = 4
 	sizeColBlockOffset = 4
-	sizeColumnMetadata = 8
+	sizeColIsString    = 4
+	sizeColumnMetadata = sizeStorageLen + sizeColBlockOffset + sizeColIsString
 
 	sizeCapacity        = 4
 	sizeCompressionType = 2
@@ -217,11 +218,14 @@ func (m *KwDataRowBatch) decodeMeta(src []byte) (rowNum, colNum int, err error) 
 		m.ColBlockOffset = m.ColBlockOffset[:colNum]
 	}
 
-	// Parse column metadata
+	// Parse column metadata.
+	// kwbase writes 3 int32 values per column:
+	// fixed_storage_len, col_offset, is_string.
 	rp := minMsgBodyLen
 	for i := 0; i < colNum; i++ {
 		m.StorageLen[i] = binary.BigEndian.Uint32(src[rp:])
 		m.ColBlockOffset[i] = binary.BigEndian.Uint32(src[rp+sizeStorageLen:])
+		// isString := binary.BigEndian.Uint32(src[rp+8:])
 		rp += sizeColumnMetadata
 	}
 
@@ -230,6 +234,33 @@ func (m *KwDataRowBatch) decodeMeta(src []byte) (rowNum, colNum int, err error) 
 
 	m.CompressionType = int16(binary.BigEndian.Uint16(src[rp:]))
 	rp += sizeCompressionType
+
+	if m.CompressionType == CompressionTypeSnappy || m.CompressionType == CompressionTypeLZ4 {
+		if len(src[rp:]) < 4 {
+			return 0, 0, fmt.Errorf("KwDataRowBatch: missing var string length")
+		}
+
+		varStrLen := int(binary.BigEndian.Uint32(src[rp:]))
+		rp += 4
+
+		if varStrLen > 0 {
+			if len(src[rp:]) < 4 {
+				return 0, 0, fmt.Errorf("KwDataRowBatch: missing compressed var string size")
+			}
+
+			compressedVarSize := int(binary.BigEndian.Uint32(src[rp:]))
+			rp += 4
+
+			if compressedVarSize < 0 || compressedVarSize > len(src[rp:]) {
+				return 0, 0, fmt.Errorf("KwDataRowBatch: invalid compressed var "+
+					"string size %d", compressedVarSize)
+			}
+
+			// Skip the compressed var-string block for now. If the string column results turn out incorrect later,
+			// uncomment/unpack this part to handle variable-length string columns.
+			rp += compressedVarSize
+		}
+	}
 
 	if len(m.ColOIDs) != colNum {
 		return 0, 0, fmt.Errorf("KwDataRowBatch: ColOIDs missing: have %d want %d", len(m.ColOIDs), colNum)
