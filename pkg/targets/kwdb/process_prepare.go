@@ -165,29 +165,12 @@ func (p *prepareProcessor) ProcessBatch(b targets.Batch, doLoad bool) (metricCou
 			s = s[1 : len(s)-1]
 			p.parseCPURowIntoBuffer(s, tableBuffer)
 
-			/*if p.sd != nil && p.sd.ParamOIDs != nil {
-				nvalCount := len(values)
-				rowNeedCount := len(p.sd.ParamOIDs)
-				for ; rowNeedCount > nvalCount; nvalCount++ {
-					// fill nill other tag for cpu all field
-					tableBuffer.Append(nil)
-				}
-			}*/
-
 			// check buffer is full
 			if tableBuffer.Length() == tableBuffer.Capacity() {
 				// init prepareStmt
 				if !cpuPrepared {
 					p.createPrepareSql("cpu")
 					p.preparedSql["cpu"] = struct{}{}
-					/*if p.sd != nil && p.sd.ParamOIDs != nil {
-						nvalCount := len(values)
-						rowNeedCount := len(p.sd.ParamOIDs)
-						for ; rowNeedCount > nvalCount; nvalCount++ {
-							// fill nill other tag for cpu all field
-							tableBuffer.Append(nil)
-						}
-					}*/
 					cpuPrepared = true
 				}
 
@@ -302,7 +285,7 @@ func (p *prepareProcessor) createDeviceAndAttribute(createSql []*point) int {
 	return deviceNums
 }
 
-func (p *prepareProcessor) createPrepareSql(deviecName string) {
+func (p *prepareProcessor) createPrepareSql(deviceName string) {
 	var insertsql strings.Builder
 	query := fmt.Sprintf("insert into %s.cpu (k_timestamp,usage_user,usage_system,usage_idle,usage_nice,usage_iowait,usage_irq,usage_softirq,usage_steal,usage_guest,usage_guest_nice,hostname) values ", p.opts.DBName)
 	insertsql.WriteString(query)
@@ -310,9 +293,10 @@ func (p *prepareProcessor) createPrepareSql(deviecName string) {
 	var err1 error
 
 	if p.useExtend() {
-		p.sd, err1 = p._db.Connection.PrepareEx(context.Background(), "insertall"+deviecName, "benchmark.public.cpu")
+		tableName := fmt.Sprintf("%s.public.cpu", p.opts.DBName)
+		p.sd, err1 = p._db.Connection.PrepareEx(context.Background(), "insertall"+deviceName, tableName)
 	} else {
-		_, err1 = p._db.Connection.Prepare(context.Background(), "insertall"+deviecName, sql)
+		_, err1 = p._db.Connection.Prepare(context.Background(), "insertall"+deviceName, sql)
 	}
 
 	if err1 != nil {

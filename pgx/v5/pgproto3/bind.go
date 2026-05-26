@@ -370,9 +370,6 @@ func FillColData(oid uint32, val []byte, dst []byte, storelen uint32, dstVarStar
 		return 8, 0, nil
 	case pgtype.Int4OID:
 		num := binary.BigEndian.Uint32(val)
-		//if num > math.MaxInt32 || num < math.MinInt32 {
-		//	return -1, -1, strconv.ErrRange
-		//}
 		binary.LittleEndian.PutUint32(dst, num)
 		return 4, 0, nil
 	case pgtype.BPCharOID:
