@@ -328,7 +328,7 @@ func (f *Frontend) Receive() (BackendMessage, error) {
 		msg = &f.copyBothResponse
 	case 'Z':
 		msg = &f.readyForQuery
-	case 'X':
+	case 'k':
 		msg = &f.parameterDescriptionEx
 	case 'M':
 		msg = &KwDataRowBatchRaw{

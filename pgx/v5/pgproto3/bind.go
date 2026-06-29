@@ -570,7 +570,7 @@ func (dst *BindEx) Decode(src []byte) error {
 
 // Encode encodes src into dst. dst will include the 1 byte message type identifier and the 4 byte message length.
 func (src *BindEx) Encode(dst []byte) []byte {
-	dst = append(dst, 'W')
+	dst = append(dst, 'l')
 	sp := len(dst)
 	dst = pgio.AppendInt32(dst, -1)
 

@@ -109,7 +109,7 @@ func (dst *ParameterDescriptionEx) Decode(src []byte) error {
 
 // Encode encodes src into dst. dst will include the 1 byte message type identifier and the 4 byte message length.
 func (src *ParameterDescriptionEx) Encode(dst []byte) []byte {
-	dst = append(dst, 'X')
+	dst = append(dst, 'k')
 	sp := len(dst)
 	dst = pgio.AppendInt32(dst, -1)
 
