@@ -1157,7 +1157,7 @@ func (pgConn *PgConn) ExecPreparedEx(ctx context.Context, stmtName string, sd *S
 	keyBuilder.Grow(64)
 	// transform args to paylaod
 	rowColCount := colCountPerRow
-	maxRowlen := 43 + len(sd.StorageLen)
+	maxRowlen := 43 + pgproto3.DataRowTypeSize + len(sd.StorageLen)
 	var payload *pgproto3.PayloadBuffer
 	for _, stlen := range sd.StorageLen {
 		maxRowlen += int(stlen)

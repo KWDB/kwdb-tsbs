@@ -263,6 +263,10 @@ const (
 	VarDataLenSize = 2
 	// VarColumnSize is the fixed length memory taken by var-length data type
 	VarColumnSize = 8
+	// DataRowTypeSize is the size of the row type field in the payload v2 data header.
+	DataRowTypeSize = 2
+	// TSInsertDataRowTypeTuple stores row data in the full tuple layout.
+	TSInsertDataRowTypeTuple = 1
 )
 
 type PayloadBuffer struct {
@@ -505,7 +509,9 @@ func (pd *PayloadBuffer) FillOneRow(args [][]byte, ParamOIDs []uint32,
 		pd.Data[RowNumOffset+4] = byte(payloadFlag)
 		binary.LittleEndian.PutUint32(pd.Data[tagLenPos:], uint32(taglen))
 		pd.HeadTail = posVar + usedVarLen
-		pd.Tail = pd.HeadTail + 4 // data len
+		pd.Tail = pd.HeadTail + DataLenSize
+		binary.LittleEndian.PutUint16(pd.Data[pd.Tail:], uint16(TSInsertDataRowTypeTuple))
+		pd.Tail += DataRowTypeSize
 	}
 	// data part
 	rowStart := pd.Tail + 4 // row length
