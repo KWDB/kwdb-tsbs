@@ -170,7 +170,6 @@ func (p *prepareProcessor) ProcessBatch(b targets.Batch, doLoad bool) (metricCou
 	for _, args := range batches.m {
 		rowCnt += uint64(len(args))
 		for _, s := range args {
-			s = s[1 : len(s)-1]
 			p.parseCPURowIntoBuffer(s, tableBuffer)
 
 			// check buffer is full
@@ -200,8 +199,12 @@ func (p *prepareProcessor) ProcessBatch(b targets.Batch, doLoad bool) (metricCou
 
 func (p *prepareProcessor) parseCPURowIntoBuffer(s string, tableBuffer *fixedArgList) {
 	start := 0
-	fieldIdx := 0
 	sLen := len(s)
+	if sLen > 1 && s[0] == '(' {
+		start = 1
+		sLen--
+	}
+	fieldIdx := 0
 
 	for pos := 0; pos <= sLen; pos++ {
 		if pos != sLen && s[pos] != ',' {
@@ -209,6 +212,9 @@ func (p *prepareProcessor) parseCPURowIntoBuffer(s string, tableBuffer *fixedArg
 		}
 
 		v := s[start:pos]
+		if fieldIdx >= 12 {
+			panic(fmt.Sprintf("kwdb invalid cpu row: too many fields in %q", s))
+		}
 		if fieldIdx < 11 {
 			num, ok := fastParseInt(v)
 			if !ok {
@@ -220,28 +226,34 @@ func (p *prepareProcessor) parseCPURowIntoBuffer(s string, tableBuffer *fixedArg
 				tableBuffer.Emplace(uint64(num))
 			}
 		} else {
-			left := 0
-			right := len(v) - 1
-			for left <= right && (v[left] == ' ' || v[left] == '\t' || v[left] == '\n' || v[left] == '\r') {
-				left++
+			q1 := -1
+			for i := 0; i < len(v); i++ {
+				if v[i] == '\'' {
+					q1 = i
+					break
+				}
 			}
-			for right >= left && (v[right] == ' ' || v[right] == '\t' || v[right] == '\n' || v[right] == '\r') {
-				right--
-			}
-			trimmed := v[left : right+1]
-			q1 := strings.IndexByte(trimmed, '\'')
 			if q1 < 0 {
-				panic(fmt.Sprintf("kwdb invalid hostname field: %q", trimmed))
+				panic(fmt.Sprintf("kwdb invalid hostname field: %q", v))
 			}
-			q2 := strings.IndexByte(trimmed[q1+1:], '\'')
+			q2 := -1
+			for i := q1 + 1; i < len(v); i++ {
+				if v[i] == '\'' {
+					q2 = i
+					break
+				}
+			}
 			if q2 < 0 {
-				panic(fmt.Sprintf("kwdb invalid hostname field: %q", trimmed))
+				panic(fmt.Sprintf("kwdb invalid hostname field: %q", v))
 			}
-			tableBuffer.Append(stringBytes(trimmed[q1+1 : q1+1+q2]))
+			tableBuffer.Append(stringBytes(v[q1+1 : q2]))
 		}
 
 		fieldIdx++
 		start = pos + 1
+	}
+	if fieldIdx != 12 {
+		panic(fmt.Sprintf("kwdb invalid cpu row: expected 12 fields, got %d in %q", fieldIdx, s))
 	}
 }
 

@@ -84,7 +84,11 @@ func (ha *hypertableArr) Len() uint {
 func (ha *hypertableArr) Append(item data.LoadedPoint) {
 	that := item.Data.(*point)
 	if that.sqlType == Insert {
-		ha.m[that.device] = append(ha.m[that.device], that.sql)
+		rows := ha.m[that.device]
+		if rows == nil {
+			rows = make([]string, 0, 128)
+		}
+		ha.m[that.device] = append(rows, that.sql)
 		ha.totalMetric += uint64(that.fieldCount)
 		ha.cnt++
 	} else {
@@ -93,7 +97,10 @@ func (ha *hypertableArr) Append(item data.LoadedPoint) {
 }
 
 func (ha *hypertableArr) Reset() {
-	ha.m = map[string][]string{}
+	for k, rows := range ha.m {
+		ha.m[k] = rows[:0]
+	}
+	ha.totalMetric = 0
 	ha.cnt = 0
 	ha.createSql = ha.createSql[:0]
 }
@@ -102,7 +109,7 @@ type factory struct{}
 
 func (f *factory) New() targets.Batch {
 	return &hypertableArr{
-		m:   map[string][]string{},
+		m:   make(map[string][]string, 1024),
 		cnt: 0,
 	}
 }
