@@ -135,6 +135,9 @@ func (p *prepareProcessor) ProcessBatch(b targets.Batch, doLoad bool) (metricCou
 	rowCnt := uint64(0)
 	metricCnt := batches.totalMetric
 	if !doLoad {
+		if len(batches.rows) > 0 {
+			return metricCnt, uint64(len(batches.rows))
+		}
 		for _, sqls := range batches.m {
 			rowCnt += uint64(len(sqls))
 		}
@@ -166,29 +169,40 @@ func (p *prepareProcessor) ProcessBatch(b targets.Batch, doLoad bool) (metricCou
 	tableBuffer := p.buffer["cpu"]
 	_, cpuPrepared := p.preparedSql["cpu"]
 
-	// join args and execute
-	for _, args := range batches.m {
-		rowCnt += uint64(len(args))
-		for _, s := range args {
-			p.parseCPURowIntoBuffer(s, tableBuffer)
+	processRow := func(s string) {
+		p.parseCPURowIntoBuffer(s, tableBuffer)
 
-			// check buffer is full
-			if tableBuffer.Length() == tableBuffer.Capacity() {
-				// init prepareStmt
-				if !cpuPrepared {
-					p.createPrepareSql("cpu")
-					p.preparedSql["cpu"] = struct{}{}
-					cpuPrepared = true
-				}
+		// check buffer is full
+		if tableBuffer.Length() == tableBuffer.Capacity() {
+			// init prepareStmt
+			if !cpuPrepared {
+				p.createPrepareSql("cpu")
+				p.preparedSql["cpu"] = struct{}{}
+				cpuPrepared = true
+			}
 
-				if p.useExtend() {
-					p.execPrepareStmtEx("cpu", tableBuffer.args, 12)
-				} else {
-					p.execPrepareStmt("cpu", tableBuffer.args)
-				}
+			if p.useExtend() {
+				p.execPrepareStmtEx("cpu", tableBuffer.args, 12)
+			} else {
+				p.execPrepareStmt("cpu", tableBuffer.args)
+			}
 
-				// reuse buffer: reset tableBuffer's write position
-				tableBuffer.Reset()
+			// reuse buffer: reset tableBuffer's write position
+			tableBuffer.Reset()
+		}
+	}
+
+	if len(batches.rows) > 0 {
+		rowCnt += uint64(len(batches.rows))
+		for _, s := range batches.rows {
+			processRow(s)
+		}
+	} else {
+		// join args and execute
+		for _, args := range batches.m {
+			rowCnt += uint64(len(args))
+			for _, s := range args {
+				processRow(s)
 			}
 		}
 	}

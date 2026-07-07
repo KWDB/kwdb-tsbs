@@ -16,6 +16,7 @@ var (
 )
 
 func NewBenchmark(dbName string, opts *LoadingOptions, dataSourceConfig *source.DataSourceConfig) (targets.Benchmark, error) {
+	casetype = opts.Type
 	var ds targets.DataSource
 	if dataSourceConfig.Type == source.FileDataSourceType {
 		ds = newFileDataSource(dataSourceConfig.File.Location)

@@ -73,6 +73,7 @@ var GlobalTable = sync.Map{}
 type hypertableArr struct {
 	createSql   []*point
 	m           map[string][]string
+	rows        []string
 	totalMetric uint64
 	cnt         uint
 }
@@ -84,6 +85,12 @@ func (ha *hypertableArr) Len() uint {
 func (ha *hypertableArr) Append(item data.LoadedPoint) {
 	that := item.Data.(*point)
 	if that.sqlType == Insert {
+		if casetype == KWDBPREPARE || casetype == KWDBPREPAREEXTEND {
+			ha.rows = append(ha.rows, that.sql)
+			ha.totalMetric += uint64(that.fieldCount)
+			ha.cnt++
+			return
+		}
 		rows := ha.m[that.device]
 		if rows == nil {
 			rows = make([]string, 0, 128)
@@ -101,6 +108,7 @@ func (ha *hypertableArr) Reset() {
 		ha.m[k] = rows[:0]
 	}
 	ha.totalMetric = 0
+	ha.rows = ha.rows[:0]
 	ha.cnt = 0
 	ha.createSql = ha.createSql[:0]
 }
@@ -109,7 +117,8 @@ type factory struct{}
 
 func (f *factory) New() targets.Batch {
 	return &hypertableArr{
-		m:   make(map[string][]string, 1024),
-		cnt: 0,
+		m:    make(map[string][]string, 1024),
+		rows: make([]string, 0, 4096),
+		cnt:  0,
 	}
 }
