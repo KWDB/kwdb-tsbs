@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unsafe"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -19,6 +20,13 @@ type fixedArgList struct {
 	args     [][]byte
 	capacity int
 	writePos int
+}
+
+func stringBytes(s string) []byte {
+	if len(s) == 0 {
+		return nil
+	}
+	return unsafe.Slice(unsafe.StringData(s), len(s))
 }
 
 func newFixedArgList(capacity int) *fixedArgList {
@@ -88,7 +96,7 @@ func newProcessorPrepare(opts *LoadingOptions, dbName string) *prepareProcessor 
 }
 
 func (p *prepareProcessor) useExtend() bool {
-	return true
+	return p.opts.Type == KWDBPREPAREEXTEND
 }
 
 func (p *prepareProcessor) Init(workerNum int, doLoad, _ bool) {
@@ -229,7 +237,7 @@ func (p *prepareProcessor) parseCPURowIntoBuffer(s string, tableBuffer *fixedArg
 			if q2 < 0 {
 				panic(fmt.Sprintf("kwdb invalid hostname field: %q", trimmed))
 			}
-			tableBuffer.Append([]byte(trimmed[q1+1 : q1+1+q2]))
+			tableBuffer.Append(stringBytes(trimmed[q1+1 : q1+1+q2]))
 		}
 
 		fieldIdx++

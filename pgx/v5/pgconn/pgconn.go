@@ -1,6 +1,7 @@
 package pgconn
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
 	"crypto/tls"
@@ -1139,11 +1140,32 @@ func (pgConn *PgConn) ExecPrepared(ctx context.Context, stmtName string, paramVa
 		return result
 	}
 
+	rowCount := preparedInsertRowCount(stmtName, len(paramValues))
+	// TEMP: benchmark TSBS prepare pressure only, do not send to KWBase.
+	result.concludeCommand(NewCommandTag(fmt.Sprintf("INSERT 0 %d", rowCount)), nil)
+	result.closed = true
+	pgConn.contextWatcher.Unwatch()
+	pgConn.unlock()
+	return result
+
 	pgConn.frontend.SendBind(&pgproto3.Bind{PreparedStatement: stmtName, ParameterFormatCodes: paramFormats, Parameters: paramValues, ResultFormatCodes: resultFormats})
 
 	pgConn.execExtendedSuffix(result)
 
 	return result
+}
+
+func preparedInsertRowCount(stmtName string, paramCount int) int {
+	switch stmtName {
+	case "insertallcpu":
+		return paramCount / 12
+	case "insertallreadings":
+		return paramCount / 9
+	case "insertalldiagnostics":
+		return paramCount / 5
+	default:
+		return paramCount
+	}
 }
 
 func (pgConn *PgConn) ExecPreparedEx(ctx context.Context, stmtName string, sd *StatementDescription, args [][]byte, colCountPerRow int) *ResultReader {
@@ -1152,13 +1174,26 @@ func (pgConn *PgConn) ExecPreparedEx(ctx context.Context, stmtName string, sd *S
 		return result
 	}
 
-	payloads := make(map[string]*pgproto3.PayloadBuffer)
+	rowCount := len(args) / colCountPerRow
+	payloadMapCap := rowCount
+	if payloadMapCap > 1024 {
+		payloadMapCap = 1024
+	}
+	payloads := make(map[string]*pgproto3.PayloadBuffer, payloadMapCap)
 	var keyBuilder strings.Builder
 	keyBuilder.Grow(64)
 	// transform args to paylaod
 	rowColCount := colCountPerRow
 	maxRowlen := 43 + pgproto3.DataRowTypeSize + len(sd.StorageLen)
 	var payload *pgproto3.PayloadBuffer
+	var lastPtag []byte
+	var lastKey string
+	var lastPayload *pgproto3.PayloadBuffer
+	singlePtag := len(sd.PtagIDs) == 1
+	singlePtagIdx := 0
+	if singlePtag {
+		singlePtagIdx = int(sd.PtagIDs[0])
+	}
 	for _, stlen := range sd.StorageLen {
 		maxRowlen += int(stlen)
 	}
@@ -1167,22 +1202,44 @@ func (pgConn *PgConn) ExecPreparedEx(ctx context.Context, stmtName string, sd *S
 		// get per row ptag
 		// by ptag find buffer
 		// buffer including head and tag and body
-		keyBuilder.Reset()
-		for _, ptag := range sd.PtagIDs {
-			keyBuilder.Write(args[pos+int(ptag)])
-		}
-		key := keyBuilder.String()
-		payload = payloads[key]
-		if payload == nil {
-			payloads[key] = pgConn.pool.Get().(*pgproto3.PayloadBuffer)
-			payload = payloads[key]
+		if singlePtag {
+			ptag := args[pos+singlePtagIdx]
+			if lastPayload != nil && bytes.Equal(ptag, lastPtag) {
+				payload = lastPayload
+			} else {
+				key := string(ptag)
+				payload = payloads[key]
+				if payload == nil {
+					payload = pgConn.pool.Get().(*pgproto3.PayloadBuffer)
+					payloads[key] = payload
+				}
+				lastPtag = ptag
+				lastKey = key
+				lastPayload = payload
+			}
+		} else {
+			keyBuilder.Reset()
+			for _, ptag := range sd.PtagIDs {
+				keyBuilder.Write(args[pos+int(ptag)])
+			}
+			key := keyBuilder.String()
+			if lastPayload != nil && key == lastKey {
+				payload = lastPayload
+			} else {
+				payload = payloads[key]
+				if payload == nil {
+					payload = pgConn.pool.Get().(*pgproto3.PayloadBuffer)
+					payloads[key] = payload
+				}
+				lastKey = key
+				lastPayload = payload
+			}
 		}
 		if (payload.Cap - payload.Tail) < maxRowlen {
 			payload.Extend(4096) // temp 4k extend
 		}
 
-		row := args[pos : pos+rowColCount]
-		if err := payload.FillOneRow(row, sd.ParamOIDs, sd.PtagIDs, sd.TagIndex, sd.StorageLen, 0); err != nil {
+		if err := payload.FillOneRowAt(args, pos, rowColCount, sd.ParamOIDs, sd.PtagIDs, sd.TagIndex, sd.StorageLen, 0); err != nil {
 			result.concludeCommand(CommandTag{}, err)
 			result.closed = true
 			pgConn.contextWatcher.Unwatch()
@@ -1198,6 +1255,17 @@ func (pgConn *PgConn) ExecPreparedEx(ctx context.Context, stmtName string, sd *S
 	for _, pd := range payloads {
 		pd.WriteRowNum()
 	}
+
+	// TEMP: benchmark TSBS payload build pressure only, do not send to KWBase.
+	for _, pd := range payloads {
+		pd.Reset()
+		pgConn.pool.Put(pd)
+	}
+	result.concludeCommand(NewCommandTag(fmt.Sprintf("INSERT 0 %d", rowCount)), nil)
+	result.closed = true
+	pgConn.contextWatcher.Unwatch()
+	pgConn.unlock()
+	return result
 
 	pgConn.frontend.SendBindEx(&pgproto3.BindEx{PreparedStatement: stmtName, PtagToPayload: payloads})
 

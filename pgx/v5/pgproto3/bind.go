@@ -449,6 +449,11 @@ const (
 
 func (pd *PayloadBuffer) FillOneRow(args [][]byte, ParamOIDs []uint32,
 	PtagIDs []uint16, TagIndex int16, StorageLen []uint32, rowNum uint32) error {
+	return pd.FillOneRowAt(args, 0, len(args), ParamOIDs, PtagIDs, TagIndex, StorageLen, rowNum)
+}
+
+func (pd *PayloadBuffer) FillOneRowAt(args [][]byte, offset int, colCount int, ParamOIDs []uint32,
+	PtagIDs []uint16, TagIndex int16, StorageLen []uint32, rowNum uint32) error {
 	var err error
 	lenCol := 0
 	pos := 0
@@ -464,7 +469,7 @@ func (pd *PayloadBuffer) FillOneRow(args [][]byte, ParamOIDs []uint32,
 		ptagDataStart := pos + PTagLenSize
 		for _, pIdx := range PtagIDs {
 			ptaglen += int(StorageLen[pIdx])
-			tagLen, _, err := FillColData(ParamOIDs[pIdx], args[pIdx], pd.Data[ptagDataStart:],
+			tagLen, _, err := FillColData(ParamOIDs[pIdx], args[offset+int(pIdx)], pd.Data[ptagDataStart:],
 				StorageLen[pIdx], nil, 0, true)
 			if err != nil {
 				return err
@@ -489,14 +494,14 @@ func (pd *PayloadBuffer) FillOneRow(args [][]byte, ParamOIDs []uint32,
 		taglen += ((allColCount - int(TagIndex)) / 8) + 1
 		payloadFlag := BothTagAndData
 		for i := int(TagIndex); i < len(StorageLen); i++ {
-			if (i+1) > len(args) || args[i] == nil {
+			if (i+1) > colCount || args[offset+i] == nil {
 				pd.Data[posTagStart+((i-int(TagIndex))/8)] |= 1 << ((i - int(TagIndex)) % 8)
 				pos += int(StorageLen[int(i)])
 				taglen += int(StorageLen[int(i)])
 				continue
 			}
 			payloadFlag = BothTagAndData
-			lenCol, usingVarLen, err = FillColData(ParamOIDs[i], args[i], pd.Data[pos:],
+			lenCol, usingVarLen, err = FillColData(ParamOIDs[i], args[offset+i], pd.Data[pos:],
 				StorageLen[i], pd.Data[posVar:], uint16(usedVarLen), false)
 			if err != nil {
 				return err
@@ -521,7 +526,7 @@ func (pd *PayloadBuffer) FillOneRow(args [][]byte, ParamOIDs []uint32,
 	posRowVarStart := lenTuple + rowDataStart
 	pos = rowDataStart
 	for c := 0; c < int(TagIndex); c++ {
-		lenCol, usingVarLen, err = FillColData(ParamOIDs[c], args[c],
+		lenCol, usingVarLen, err = FillColData(ParamOIDs[c], args[offset+c],
 			pd.Data[pos:], StorageLen[c], pd.Data[posRowVarStart:], uint16(usedVarLen), false)
 		if err != nil {
 			return err
