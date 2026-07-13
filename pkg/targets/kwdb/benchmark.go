@@ -16,10 +16,13 @@ var (
 )
 
 func NewBenchmark(dbName string, opts *LoadingOptions, dataSourceConfig *source.DataSourceConfig) (targets.Benchmark, error) {
-	casetype = opts.Type
 	var ds targets.DataSource
 	if dataSourceConfig.Type == source.FileDataSourceType {
-		ds = newFileDataSource(dataSourceConfig.File.Location)
+		if opts.Type == KWDBPREPAREEXTEND {
+			ds = newFileDataSourceExtend(dataSourceConfig.File.Location)
+		} else {
+			ds = newFileDataSource(dataSourceConfig.File.Location)
+		}
 	} else {
 		panic("not implement")
 	}
@@ -42,7 +45,7 @@ func (b *benchmark) GetDataSource() targets.DataSource {
 }
 
 func (b *benchmark) GetBatchFactory() targets.BatchFactory {
-	return &factory{}
+	return &factory{useExtendRows: b.opts.Type == KWDBPREPAREEXTEND}
 }
 
 func (b *benchmark) GetPointIndexer(maxPartitions uint) targets.PointIndexer {

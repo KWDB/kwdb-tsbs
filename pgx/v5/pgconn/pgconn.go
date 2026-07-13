@@ -1140,32 +1140,11 @@ func (pgConn *PgConn) ExecPrepared(ctx context.Context, stmtName string, paramVa
 		return result
 	}
 
-	rowCount := preparedInsertRowCount(stmtName, len(paramValues))
-	// TEMP: benchmark TSBS prepare pressure only, do not send to KWBase.
-	result.concludeCommand(NewCommandTag(fmt.Sprintf("INSERT 0 %d", rowCount)), nil)
-	result.closed = true
-	pgConn.contextWatcher.Unwatch()
-	pgConn.unlock()
-	return result
-
 	pgConn.frontend.SendBind(&pgproto3.Bind{PreparedStatement: stmtName, ParameterFormatCodes: paramFormats, Parameters: paramValues, ResultFormatCodes: resultFormats})
 
 	pgConn.execExtendedSuffix(result)
 
 	return result
-}
-
-func preparedInsertRowCount(stmtName string, paramCount int) int {
-	switch stmtName {
-	case "insertallcpu":
-		return paramCount / 12
-	case "insertallreadings":
-		return paramCount / 9
-	case "insertalldiagnostics":
-		return paramCount / 5
-	default:
-		return paramCount
-	}
 }
 
 func (pgConn *PgConn) ExecPreparedEx(ctx context.Context, stmtName string, sd *StatementDescription, args [][]byte, colCountPerRow int) *ResultReader {

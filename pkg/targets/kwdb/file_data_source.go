@@ -2,6 +2,8 @@ package kwdb
 
 import (
 	"bufio"
+	"strconv"
+	"strings"
 
 	"github.com/timescale/tsbs/load"
 	"github.com/timescale/tsbs/pkg/data"
@@ -15,12 +17,27 @@ func newFileDataSource(fileName string) targets.DataSource {
 	return &fileDataSource{scanner: bufio.NewScanner(br)}
 }
 
+func newFileDataSourceExtend(fileName string) targets.DataSource {
+	br := load.GetBufferedReader(fileName)
+
+	return &extendFileDataSource{scanner: bufio.NewScanner(br)}
+}
+
 type fileDataSource struct {
 	scanner *bufio.Scanner
 	headers *common.GeneratedDataHeaders
 }
 
+type extendFileDataSource struct {
+	scanner *bufio.Scanner
+	headers *common.GeneratedDataHeaders
+}
+
 func (d *fileDataSource) Headers() *common.GeneratedDataHeaders {
+	return nil
+}
+
+func (d *extendFileDataSource) Headers() *common.GeneratedDataHeaders {
 	return nil
 }
 
@@ -71,6 +88,41 @@ trimRight:
 }
 
 func (d *fileDataSource) NextItem() data.LoadedPoint {
+	ok := d.scanner.Scan()
+	if !ok && d.scanner.Err() == nil { // nothing scanned & no error = EOF
+		return data.LoadedPoint{}
+	} else if !ok {
+		fatal("scan error: %v", d.scanner.Err())
+		return data.LoadedPoint{}
+	}
+	p := &point{}
+	line := d.scanner.Text()
+	p.sqlType = line[0]
+	switch line[0] {
+	case Insert:
+		parts := strings.SplitN(line, ",", 4)
+		p.device = parts[1]
+		p.tag = parts[1]
+		p.fieldCount, _ = strconv.Atoi(parts[2])
+		p.sql = strings.TrimSpace(parts[3])
+
+	case CreateTemplateTable:
+		parts := strings.SplitN(line, ",", 3)
+		p.template = parts[1] //cpu
+		// p.device = parts[2]   //host_0
+		p.sql = parts[2] //(column) tags (tagStr)
+	case CreateTable:
+		parts := strings.SplitN(line, ",", 4)
+		p.template = parts[1] //cpu
+		p.device = parts[2]   //host_0
+		p.sql = parts[3]      //tags (tagValue)
+	default:
+		panic(line)
+	}
+	return data.NewLoadedPoint(p)
+}
+
+func (d *extendFileDataSource) NextItem() data.LoadedPoint {
 	ok := d.scanner.Scan()
 	if !ok && d.scanner.Err() == nil { // nothing scanned & no error = EOF
 		return data.LoadedPoint{}

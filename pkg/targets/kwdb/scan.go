@@ -25,8 +25,6 @@ type indexer struct {
 	ChansLen      int
 }
 
-var casetype string
-
 func (i *indexer) GetIndex(item data.LoadedPoint) uint {
 	p := item.Data.(*point)
 	if p.fieldCount == 11 && p.sqlType != Insert {
@@ -76,6 +74,7 @@ type hypertableArr struct {
 	rows        []string
 	totalMetric uint64
 	cnt         uint
+	useRows     bool
 }
 
 func (ha *hypertableArr) Len() uint {
@@ -85,17 +84,13 @@ func (ha *hypertableArr) Len() uint {
 func (ha *hypertableArr) Append(item data.LoadedPoint) {
 	that := item.Data.(*point)
 	if that.sqlType == Insert {
-		if casetype == KWDBPREPARE || casetype == KWDBPREPAREEXTEND {
+		if ha.useRows {
 			ha.rows = append(ha.rows, that.sql)
 			ha.totalMetric += uint64(that.fieldCount)
 			ha.cnt++
 			return
 		}
-		rows := ha.m[that.device]
-		if rows == nil {
-			rows = make([]string, 0, 128)
-		}
-		ha.m[that.device] = append(rows, that.sql)
+		ha.m[that.device] = append(ha.m[that.device], that.sql)
 		ha.totalMetric += uint64(that.fieldCount)
 		ha.cnt++
 	} else {
@@ -104,21 +99,34 @@ func (ha *hypertableArr) Append(item data.LoadedPoint) {
 }
 
 func (ha *hypertableArr) Reset() {
-	for k, rows := range ha.m {
-		ha.m[k] = rows[:0]
+	if ha.useRows {
+		for k, rows := range ha.m {
+			ha.m[k] = rows[:0]
+		}
+		ha.totalMetric = 0
+		ha.rows = ha.rows[:0]
+	} else {
+		ha.m = map[string][]string{}
 	}
-	ha.totalMetric = 0
-	ha.rows = ha.rows[:0]
 	ha.cnt = 0
 	ha.createSql = ha.createSql[:0]
 }
 
-type factory struct{}
+type factory struct {
+	useExtendRows bool
+}
 
 func (f *factory) New() targets.Batch {
+	if f.useExtendRows {
+		return &hypertableArr{
+			m:       make(map[string][]string, 1024),
+			rows:    make([]string, 0, 4096),
+			cnt:     0,
+			useRows: true,
+		}
+	}
 	return &hypertableArr{
-		m:    make(map[string][]string, 1024),
-		rows: make([]string, 0, 4096),
-		cnt:  0,
+		m:   map[string][]string{},
+		cnt: 0,
 	}
 }
