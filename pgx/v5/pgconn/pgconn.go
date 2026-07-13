@@ -1148,8 +1148,16 @@ func (pgConn *PgConn) ExecPrepared(ctx context.Context, stmtName string, paramVa
 }
 
 func (pgConn *PgConn) ExecPreparedEx(ctx context.Context, stmtName string, sd *StatementDescription, args [][]byte, colCountPerRow int) *ResultReader {
-	result := pgConn.execExtendedPrefix(ctx, args)
+	result := pgConn.execExtendedPrefixWithoutParamLimit(ctx)
 	if result.closed {
+		return result
+	}
+
+	if colCountPerRow <= 0 || len(args)%colCountPerRow != 0 {
+		result.concludeCommand(CommandTag{}, fmt.Errorf("invalid prepare-extend args: args=%d colCountPerRow=%d", len(args), colCountPerRow))
+		result.closed = true
+		pgConn.contextWatcher.Unwatch()
+		pgConn.unlock()
 		return result
 	}
 
@@ -1235,16 +1243,16 @@ func (pgConn *PgConn) ExecPreparedEx(ctx context.Context, stmtName string, sd *S
 		pd.WriteRowNum()
 	}
 
-	// TEMP: benchmark TSBS payload build pressure only, do not send to KWBase.
-	for _, pd := range payloads {
-		pd.Reset()
-		pgConn.pool.Put(pd)
-	}
-	result.concludeCommand(NewCommandTag(fmt.Sprintf("INSERT 0 %d", rowCount)), nil)
-	result.closed = true
-	pgConn.contextWatcher.Unwatch()
-	pgConn.unlock()
-	return result
+	//// TEMP: benchmark TSBS payload build pressure only, do not send to KWBase.
+	//for _, pd := range payloads {
+	//	pd.Reset()
+	//	pgConn.pool.Put(pd)
+	//}
+	//result.concludeCommand(NewCommandTag(fmt.Sprintf("INSERT 0 %d", rowCount)), nil)
+	//result.closed = true
+	//pgConn.contextWatcher.Unwatch()
+	//pgConn.unlock()
+	//return result
 
 	pgConn.frontend.SendBindEx(&pgproto3.BindEx{PreparedStatement: stmtName, PtagToPayload: payloads})
 
@@ -1268,6 +1276,34 @@ func (pgConn *PgConn) ExecPreparedEx(ctx context.Context, stmtName string, sd *S
 	}
 
 	result.readUntilRowDescription()
+
+	return result
+}
+
+func (pgConn *PgConn) execExtendedPrefixWithoutParamLimit(ctx context.Context) *ResultReader {
+	pgConn.resultReader = ResultReader{
+		pgConn: pgConn,
+		ctx:    ctx,
+	}
+	result := &pgConn.resultReader
+
+	if err := pgConn.lock(); err != nil {
+		result.concludeCommand(CommandTag{}, err)
+		result.closed = true
+		return result
+	}
+
+	if ctx != context.Background() {
+		select {
+		case <-ctx.Done():
+			result.concludeCommand(CommandTag{}, newContextAlreadyDoneError(ctx))
+			result.closed = true
+			pgConn.unlock()
+			return result
+		default:
+		}
+		pgConn.contextWatcher.Watch(ctx)
+	}
 
 	return result
 }
