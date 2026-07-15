@@ -399,24 +399,6 @@ func FillColData(oid uint32, val []byte, dst []byte, storelen uint32, dstVarStar
 	}
 }
 
-func CalcVarPosHead(ptagDataLen int, posBaseHead int, idxTag int,
-	StorageLen []uint32) (int, int) {
-	posTagStart := 0
-	posVarStart := 0
-	posVarStart = posBaseHead
-	posVarStart += 2
-	posVarStart += ptagDataLen
-	posVarStart += 4
-	posTagStart = posVarStart
-	// bitmap
-	allColCount := len(StorageLen)
-	posVarStart += int((allColCount-idxTag)/8) + 1
-	for i := idxTag; i < len(StorageLen); i++ {
-		posVarStart += int(StorageLen[i])
-	}
-	return posTagStart, posVarStart
-}
-
 // calc metric col row size
 func computeRowSize(ParamOIDs []uint32, StorageLen []uint32) int {
 	rowSize := 0
@@ -477,43 +459,17 @@ func (pd *PayloadBuffer) FillOneRowAt(args [][]byte, offset int, colCount int, P
 			ptagDataStart += tagLen
 		}
 
-		taglen := 0
-
-		// rowNum
-		// binary.LittleEndian.PutUint32(pd.Data[RowNumOffset:], rowNum)
-		posTagStart, posVar := CalcVarPosHead(ptaglen, pos, int(TagIndex), StorageLen)
+		posTagStart := pos + PTagLenSize + ptaglen + AllTagLenSize
 		// ptag data
 		binary.LittleEndian.PutUint16(pd.Data[pos:], uint16(ptaglen))
 		pos += 2
-		// copy(pd.Data[pos:], ptag)
 
 		// tag data
-		tagLenPos := posTagStart - 4
-		allColCount := len(StorageLen)
-		pos = posTagStart + int((allColCount-int(TagIndex))/8) + 1 // bitmap
-		taglen += ((allColCount - int(TagIndex)) / 8) + 1
+		tagLenPos := posTagStart - AllTagLenSize
 		payloadFlag := BothTagAndData
-		for i := int(TagIndex); i < len(StorageLen); i++ {
-			if (i+1) > colCount || args[offset+i] == nil {
-				pd.Data[posTagStart+((i-int(TagIndex))/8)] |= 1 << ((i - int(TagIndex)) % 8)
-				pos += int(StorageLen[int(i)])
-				taglen += int(StorageLen[int(i)])
-				continue
-			}
-			payloadFlag = BothTagAndData
-			lenCol, usingVarLen, err = FillColData(ParamOIDs[i], args[offset+i], pd.Data[pos:],
-				StorageLen[i], pd.Data[posVar:], uint16(usedVarLen), false)
-			if err != nil {
-				return err
-			}
-			if usingVarLen > 0 {
-				usedVarLen += usingVarLen
-			}
-			taglen += lenCol
-		}
 		pd.Data[RowNumOffset+4] = byte(payloadFlag)
-		binary.LittleEndian.PutUint32(pd.Data[tagLenPos:], uint32(taglen))
-		pd.HeadTail = posVar + usedVarLen
+		binary.LittleEndian.PutUint32(pd.Data[tagLenPos:], 0)
+		pd.HeadTail = posTagStart
 		pd.Tail = pd.HeadTail + DataLenSize
 		binary.LittleEndian.PutUint16(pd.Data[pd.Tail:], uint16(TSInsertDataRowTypeTuple))
 		pd.Tail += DataRowTypeSize
