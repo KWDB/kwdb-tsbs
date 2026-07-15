@@ -14,19 +14,24 @@ import (
 //
 // | Field             | Type    | Size (Bytes)    | Description                                      |
 // |-------------------|---------|-----------------|--------------------------------------------------|
+// | TimeZone          | int16   | 2               | Session time zone                                |
 // | RowNum            | int32   | 4               | Number of rows in the batch                      |
 // | ColNum            | int16   | 2               | Number of columns                                |
 // | RowSize           | int32   | 4               | Size of a row                                    |
-// | Column Metadata   | Array   | ColNum * 8      | Repeated for each column (StorageLen + Offset)   |
+// | Column Metadata   | Array   | ColNum * 16     | Repeated for each column                         |
 // | Capacity          | int32   | 4               | Batch capacity                                   |
-// | CompressionType   | int16   | 2               | 2=Uncompressed, 3/4=Compressed                   |
+// | CompressionType   | int16   | 2               | 2=Uncompressed, 3=Snappy, 4=LZ4                  |
+// | VarContainerLen   | int32   | 4               | Total length of variable string container        |
+// | VarContainer      | []byte  | VarContainerLen | Optional compressed variable string pool         |
 // | Payload           | []byte  | Variable        | Data bytes (structure depends on CompressionType)|
 //
 // Column Metadata Structure (Repeated ColNum times):
 // | Field             | Type    | Size (Bytes)    | Description                                      |
 // |-------------------|---------|-----------------|--------------------------------------------------|
-// | StorageLen        | int32   | 4               | Data length per cell for this column             |
-// | ColBlockOffset    | int32   | 4               | Offset in Payload for this column's data         |
+// | TimePrecision     | int32   | 4               | timestamp precision (3, 6, 9), otherwise 0       |
+// | StorageLen        | int32   | 4               | Fixed cell length for this column                |
+// | ColBlockOffset    | int32   | 4               | Data offset in the uncompressed column block     |
+// | IfVar             | int32   | 4               | 1=variable string, 0=fixed type                  |
 //
 // Payload Structure (CompressionType == 3 or 4):
 // Sequence of compressed blocks for each column.
@@ -40,16 +45,19 @@ import (
 // Message Body Layout Diagram:
 //
 // +-----------------------------------------------------------------------+
-// | RowNum (4 bytes)   | ColNum (2 bytes)     | RowSize (4 bytes)         |
+// | TimeZone (2 bytes) | RowNum (4 bytes)     | ColNum (2 bytes)          |
 // +-----------------------------------------------------------------------+
-// |                    Column Metadata (ColNum * 8 bytes)                 |
-// | +---------------------------+---------------------------+-----------+ |
-// | | Col 0: StorageLen (4B)    | Col 0: BlockOffset (4B)   |           | |
-// | +---------------------------+---------------------------+    ...    | |
-// | | Col N: StorageLen (4B)    | Col N: BlockOffset (4B)   |           | |
-// | +---------------------------+---------------------------+-----------+ |
+// | RowSize (4 bytes)                                                       |
+// +-----------------------------------------------------------------------+
+// |                    Column Metadata (ColNum * 16 bytes)                |
+// | +----------------------+----------------------+---------------------+ |
+// | | Col 0: Precision(4B) | Col 0: StorageLen(4B)| Col 0: Offset(4B) | |
+// | | Col 0: IfVar (4B)                                                   | |
+// | +------------------------------------------------------------- ... ---+ |
 // +-----------------------------------------------------------------------+
 // | Capacity (4 bytes)          | CompressionType (2 bytes)               |
+// +-----------------------------------------------------------------------+
+// | VarContainerLen (4 bytes)   | VarContainer (optional)                 |
 // +-----------------------------------------------------------------------+
 // |                               Payload                                 |
 // | +-------------------------------------------------------------------+ |
@@ -75,18 +83,22 @@ import (
 
 // DataRowBatch represents a batch of data rows in a column-oriented format.
 const (
-	sizeRowNum  = 4
-	sizeColNum  = 2
-	sizeRowSize = 4
+	sizeTimeZone = 2
+	sizeRowNum   = 4
+	sizeColNum   = 2
+	sizeRowSize  = 4
 
-	minMsgBodyLen = sizeRowNum + sizeColNum + sizeRowSize
+	minMsgBodyLen = sizeTimeZone + sizeRowNum + sizeColNum + sizeRowSize
 
+	sizeTimePrecision  = 4
 	sizeStorageLen     = 4
 	sizeColBlockOffset = 4
-	sizeColumnMetadata = 8
+	sizeColIfVar       = 4
+	sizeColumnMetadata = sizeTimePrecision + sizeStorageLen + sizeColBlockOffset + sizeColIfVar
 
 	sizeCapacity        = 4
 	sizeCompressionType = 2
+	sizeVarContainerLen = 4
 
 	sizeUncompressed        = 4
 	sizeCompressed          = 4
@@ -119,11 +131,14 @@ const (
 
 // KwDataRowBatch represents a batch of data rows in a column-oriented format.
 type KwDataRowBatch struct {
+	TimeZone        int16
 	RowNum          uint32
 	ColNum          uint16
 	RowSize         uint32
+	TimePrecision   []uint32
 	StorageLen      []uint32
 	ColBlockOffset  []uint32
+	ColIfVar        []uint32
 	Capacity        uint32
 	CompressionType int16
 	Payload         []byte // raw data region (may be compressed per your protocol)
@@ -186,12 +201,18 @@ func (m *KwDataRowBatch) decodeMeta(src []byte) (rowNum, colNum int, err error) 
 	msglen := len(src)
 
 	if msglen < minMsgBodyLen {
-		return 0, 0, fmt.Errorf("KwDataRowBatch: invalid body length %d (<10)", msglen)
+		return 0, 0, fmt.Errorf("KwDataRowBatch: invalid body length %d (<%d)", msglen, minMsgBodyLen)
 	}
 
-	m.RowNum = binary.BigEndian.Uint32(src)
-	m.ColNum = binary.BigEndian.Uint16(src[sizeRowNum:])
-	m.RowSize = binary.BigEndian.Uint32(src[sizeRowNum+sizeColNum:])
+	rp := 0
+	m.TimeZone = int16(binary.BigEndian.Uint16(src[rp:]))
+	rp += sizeTimeZone
+	m.RowNum = binary.BigEndian.Uint32(src[rp:])
+	rp += sizeRowNum
+	m.ColNum = binary.BigEndian.Uint16(src[rp:])
+	rp += sizeColNum
+	m.RowSize = binary.BigEndian.Uint32(src[rp:])
+	rp += sizeRowSize
 
 	if m.RowNum == 0 {
 		return 0, 0, fmt.Errorf("KwDataRowBatch: invalid rowNum %d", m.RowNum)
@@ -204,24 +225,32 @@ func (m *KwDataRowBatch) decodeMeta(src []byte) (rowNum, colNum int, err error) 
 	rowNum = int(m.RowNum)
 	colNum = int(m.ColNum)
 
-	requiredHeaderLen := minMsgBodyLen + colNum*sizeColumnMetadata + sizeCapacity + sizeCompressionType
+	requiredHeaderLen := minMsgBodyLen + colNum*sizeColumnMetadata + sizeCapacity + sizeCompressionType + sizeVarContainerLen
 	if requiredHeaderLen > msglen {
 		return 0, 0, fmt.Errorf("KwDataRowBatch: body too short for %d meta (len=%d)", m.ColNum, msglen)
 	}
 
-	if cap(m.StorageLen) < colNum {
+	if cap(m.TimePrecision) < colNum || cap(m.StorageLen) < colNum ||
+		cap(m.ColBlockOffset) < colNum || cap(m.ColIfVar) < colNum {
+		m.TimePrecision = make([]uint32, colNum)
 		m.StorageLen = make([]uint32, colNum)
 		m.ColBlockOffset = make([]uint32, colNum)
+		m.ColIfVar = make([]uint32, colNum)
 	} else {
+		m.TimePrecision = m.TimePrecision[:colNum]
 		m.StorageLen = m.StorageLen[:colNum]
 		m.ColBlockOffset = m.ColBlockOffset[:colNum]
+		m.ColIfVar = m.ColIfVar[:colNum]
 	}
 
-	// Parse column metadata
-	rp := minMsgBodyLen
+	// Parse column metadata.
+	// kwbase writes 4 int32 values per column:
+	// time_precision, fixed_storage_len, col_offset, if_var.
 	for i := 0; i < colNum; i++ {
-		m.StorageLen[i] = binary.BigEndian.Uint32(src[rp:])
-		m.ColBlockOffset[i] = binary.BigEndian.Uint32(src[rp+sizeStorageLen:])
+		m.TimePrecision[i] = binary.BigEndian.Uint32(src[rp:])
+		m.StorageLen[i] = binary.BigEndian.Uint32(src[rp+sizeTimePrecision:])
+		m.ColBlockOffset[i] = binary.BigEndian.Uint32(src[rp+sizeTimePrecision+sizeStorageLen:])
+		m.ColIfVar[i] = binary.BigEndian.Uint32(src[rp+sizeTimePrecision+sizeStorageLen+sizeColBlockOffset:])
 		rp += sizeColumnMetadata
 	}
 
@@ -230,6 +259,25 @@ func (m *KwDataRowBatch) decodeMeta(src []byte) (rowNum, colNum int, err error) 
 
 	m.CompressionType = int16(binary.BigEndian.Uint16(src[rp:]))
 	rp += sizeCompressionType
+
+	varContainerLen := int(binary.BigEndian.Uint32(src[rp:]))
+	rp += sizeVarContainerLen
+
+	if varContainerLen < 0 || varContainerLen > len(src[rp:]) {
+		return 0, 0, fmt.Errorf("KwDataRowBatch: invalid variable container length %d", varContainerLen)
+	}
+	if varContainerLen > 0 {
+		varContainer := src[rp : rp+varContainerLen]
+		if len(varContainer) < sizeCompressed {
+			return 0, 0, fmt.Errorf("KwDataRowBatch: variable container too short %d", len(varContainer))
+		}
+		compressedVarLen := int(binary.BigEndian.Uint32(varContainer))
+		if compressedVarLen < 0 || compressedVarLen > len(varContainer)-sizeCompressed {
+			return 0, 0, fmt.Errorf("KwDataRowBatch: invalid compressed variable length %d", compressedVarLen)
+		}
+		// Variable string columns are not materialized by this fast path yet.
+		rp += varContainerLen
+	}
 
 	if len(m.ColOIDs) != colNum {
 		return 0, 0, fmt.Errorf("KwDataRowBatch: ColOIDs missing: have %d want %d", len(m.ColOIDs), colNum)
