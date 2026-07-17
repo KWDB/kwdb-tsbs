@@ -195,22 +195,39 @@ func (p *prepareProcessor) ProcessBatch(b targets.Batch, doLoad bool) (metricCou
 			rowCnt += uint64(len(args))
 			for _, s := range args {
 				s = s[1 : len(s)-1]
-				p.parseCPURowIntoBuffer(s, tableBuffer)
+				values := strings.Split(s, ",")
+
+				// Emplace
+				for i, v := range values {
+					if i < 11 {
+						num, ok := fastParseInt(v)
+						if !ok {
+							num, _ = strconv.ParseInt(v, 10, 64)
+						}
+						if i == 0 {
+							// timestamp: UTC+8 Time Zone
+							tableBuffer.Emplace(uint64(num*1000) - microsecFromUnixEpochToY2K)
+						} else {
+							// row data
+							tableBuffer.Emplace(uint64(num))
+						}
+					} else {
+						v = strings.TrimSpace(v)
+						vv := strings.Split(v, "'")
+						tableBuffer.Append([]byte(vv[1]))
+					}
+				}
 
 				// check buffer is full
 				if tableBuffer.Length() == tableBuffer.Capacity() {
 					// init prepareStmt
-					if !cpuPrepared {
+					_, ok := p.preparedSql["cpu"]
+					if !ok {
 						p.createPrepareSql("cpu")
 						p.preparedSql["cpu"] = struct{}{}
-						cpuPrepared = true
 					}
 
-					if p.useExtend() {
-						p.execPrepareStmtEx("cpu", tableBuffer.args, 12)
-					} else {
-						p.execPrepareStmt("cpu", tableBuffer.args)
-					}
+					p.execPrepareStmt("cpu", tableBuffer.args)
 
 					// reuse buffer: reset tableBuffer's write position
 					tableBuffer.Reset()
@@ -221,53 +238,6 @@ func (p *prepareProcessor) ProcessBatch(b targets.Batch, doLoad bool) (metricCou
 
 	// batches.Reset()
 	return metricCnt + uint64(deviceNums)*20, rowCnt + uint64(deviceNums)
-}
-
-func (p *prepareProcessor) parseCPURowIntoBuffer(s string, tableBuffer *fixedArgList) {
-	start := 0
-	fieldIdx := 0
-	sLen := len(s)
-
-	for pos := 0; pos <= sLen; pos++ {
-		if pos != sLen && s[pos] != ',' {
-			continue
-		}
-
-		v := s[start:pos]
-		if fieldIdx < 11 {
-			num, ok := fastParseInt(v)
-			if !ok {
-				num, _ = strconv.ParseInt(v, 10, 64)
-			}
-			if fieldIdx == 0 {
-				tableBuffer.Emplace(uint64(num*1000) - microsecFromUnixEpochToY2K)
-			} else {
-				tableBuffer.Emplace(uint64(num))
-			}
-		} else {
-			left := 0
-			right := len(v) - 1
-			for left <= right && (v[left] == ' ' || v[left] == '\t' || v[left] == '\n' || v[left] == '\r') {
-				left++
-			}
-			for right >= left && (v[right] == ' ' || v[right] == '\t' || v[right] == '\n' || v[right] == '\r') {
-				right--
-			}
-			trimmed := v[left : right+1]
-			q1 := strings.IndexByte(trimmed, '\'')
-			if q1 < 0 {
-				panic(fmt.Sprintf("kwdb invalid hostname field: %q", trimmed))
-			}
-			q2 := strings.IndexByte(trimmed[q1+1:], '\'')
-			if q2 < 0 {
-				panic(fmt.Sprintf("kwdb invalid hostname field: %q", trimmed))
-			}
-			tableBuffer.Append([]byte(trimmed[q1+1 : q1+1+q2]))
-		}
-
-		fieldIdx++
-		start = pos + 1
-	}
 }
 
 func (p *prepareProcessor) parseCPURowIntoBufferExtend(s string, tableBuffer *fixedArgList) {
@@ -398,7 +368,7 @@ func (p *prepareProcessor) createPrepareSql(deviceName string) {
 }
 
 func (p *prepareProcessor) execPrepareStmt(tableName string, args [][]byte) {
-	res := p._db.Connection.PgConn().ExecPrepared(context.Background(), "insertall"+tableName, args, p.formatBuf, nil).Read()
+	res := p._db.Connection.PgConn().ExecPrepared(context.Background(), "insertall"+tableName, args, p.formatBuf, []int16{}).Read()
 	if res.Err != nil {
 		panic(res.Err)
 	}
