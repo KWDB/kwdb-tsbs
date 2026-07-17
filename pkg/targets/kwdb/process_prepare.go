@@ -96,7 +96,7 @@ func newProcessorPrepare(opts *LoadingOptions, dbName string) *prepareProcessor 
 }
 
 func (p *prepareProcessor) useExtend() bool {
-	return p.opts.Type == KWDBPREPAREEXTEND
+	return true
 }
 
 func (p *prepareProcessor) Init(workerNum int, doLoad, _ bool) {
