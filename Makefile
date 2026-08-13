@@ -1,6 +1,6 @@
 # Go parameters
 GOCMD=GO111MODULE=on go
-GOBUILD=$(GOCMD) build
+GOBUILD=$(GOCMD) build -mod=vendor
 GOINSTALL=$(GOCMD) install
 GOCLEAN=$(GOCMD) clean
 GOTEST=$(GOCMD) test
@@ -48,9 +48,7 @@ coverage:
 	$(GOTEST) -race -coverprofile=coverage.txt -covermode=atomic ./...
 
 tsbs_%: $(wildcard ./cmd/$@/*.go)
-	$(GOGET) ./cmd/$@
 	$(GOBUILD) -o bin/$@ ./cmd/$@
-	$(GOINSTALL) ./cmd/$@
 
 checkfmt:
 	@echo 'Checking gofmt';\
