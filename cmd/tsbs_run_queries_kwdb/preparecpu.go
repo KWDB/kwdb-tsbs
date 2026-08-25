@@ -206,7 +206,7 @@ func (p *processor) InitCpu1() {
 	p.prepareStmt.Grow(350)
 	p.prepareStmt.WriteString("SELECT time_bucket(k_timestamp, '3600s') as k_timestamp, max(usage_user), " +
 		"max(usage_system), max(usage_idle), max(usage_nice), max(usage_iowait), max(usage_irq), " +
-		"max(usage_softirq), max(usage_steal), max(usage_guest), max(usage_guest_nice) FROM benchmark.cpu " +
+		"max(usage_softirq), max(usage_steal), max(usage_guest), max(usage_guest_nice) FROM benchmark.public.cpu " +
 		"WHERE hostname = $1 AND k_timestamp >= $2 AND k_timestamp < $3 " +
 		"GROUP BY time_bucket(k_timestamp, '3600s') ORDER BY time_bucket(k_timestamp, '3600s')")
 	p.formatBuf = make([]int16, 3)
@@ -220,7 +220,7 @@ func (p *processor) InitCpu8() {
 	p.prepareStmt.Grow(350)
 	p.prepareStmt.WriteString("SELECT time_bucket(k_timestamp, '3600s') as k_timestamp, max(usage_user), " +
 		"max(usage_system), max(usage_idle), max(usage_nice), max(usage_iowait), max(usage_irq), " +
-		"max(usage_softirq), max(usage_steal), max(usage_guest), max(usage_guest_nice) FROM benchmark.cpu " +
+		"max(usage_softirq), max(usage_steal), max(usage_guest), max(usage_guest_nice) FROM benchmark.public.cpu " +
 		"WHERE hostname IN ($1,$2,$3,$4,$5,$6,$7,$8) AND k_timestamp >= $9 AND k_timestamp < $10 " +
 		"GROUP BY time_bucket(k_timestamp, '3600s') ORDER BY time_bucket(k_timestamp, '3600s')")
 	p.formatBuf = make([]int16, 10)
@@ -233,7 +233,7 @@ func (p *processor) InitCpu8() {
 func (p *processor) InitDoubleGroupby() {
 	p.prepareStmt.Grow(350)
 	p.prepareStmt.WriteString("SELECT time_bucket(k_timestamp, '3600s') as k_timestamp, hostname, avg(usage_user) " +
-		"FROM benchmark.cpu WHERE k_timestamp >= $1 AND k_timestamp < $2 GROUP BY hostname, time_bucket(k_timestamp, '3600s') " +
+		"FROM benchmark.public.cpu WHERE k_timestamp >= $1 AND k_timestamp < $2 GROUP BY hostname, time_bucket(k_timestamp, '3600s') " +
 		"ORDER BY hostname, time_bucket(k_timestamp, '3600s')")
 	p.formatBuf = make([]int16, 2)
 	for i := 0; i < 2; i++ {
@@ -244,7 +244,7 @@ func (p *processor) InitDoubleGroupby() {
 // groupby-orderby-limit
 func (p *processor) InitGroupbyOrder() {
 	p.prepareStmt.Grow(350)
-	p.prepareStmt.WriteString("SELECT time_bucket(k_timestamp, '60s') as k_timestamp, max(usage_user) FROM benchmark.cpu " +
+	p.prepareStmt.WriteString("SELECT time_bucket(k_timestamp, '60s') as k_timestamp, max(usage_user) FROM benchmark.public.cpu " +
 		"WHERE k_timestamp < $1 GROUP BY time_bucket(k_timestamp, '60s') ORDER BY time_bucket(k_timestamp, '60s') LIMIT 5")
 	p.formatBuf = make([]int16, 1)
 	for i := 0; i < 1; i++ {
@@ -256,7 +256,7 @@ func (p *processor) InitGroupbyOrder() {
 func (p *processor) InitHighCpu1() {
 	p.prepareStmt.Grow(350)
 	p.prepareStmt.WriteString("SELECT k_timestamp,usage_user,usage_system,usage_idle,usage_nice,usage_iowait," +
-		"usage_irq,usage_softirq,usage_steal,usage_guest,usage_guest_nice FROM benchmark.cpu " +
+		"usage_irq,usage_softirq,usage_steal,usage_guest,usage_guest_nice FROM benchmark.public.cpu " +
 		"WHERE hostname=$1 AND usage_user > 90.0 AND k_timestamp >= $2 AND k_timestamp < $3")
 	p.formatBuf = make([]int16, 3)
 	for i := 0; i < 3; i++ {
@@ -268,7 +268,7 @@ func (p *processor) InitHighCpu1() {
 func (p *processor) InitHighCpuall() {
 	p.prepareStmt.Grow(350)
 	p.prepareStmt.WriteString("SELECT k_timestamp,usage_user,usage_system,usage_idle,usage_nice,usage_iowait," +
-		"usage_irq,usage_softirq,usage_steal,usage_guest,usage_guest_nice FROM benchmark.cpu " +
+		"usage_irq,usage_softirq,usage_steal,usage_guest,usage_guest_nice FROM benchmark.public.cpu " +
 		"WHERE usage_user > 90.0 AND k_timestamp >= $1 AND k_timestamp < $2")
 	p.formatBuf = make([]int16, 2)
 	for i := 0; i < 2; i++ {
@@ -282,7 +282,7 @@ func (p *processor) InitLastPoint() {
 	p.prepareStmt.WriteString("SELECT last_row(k_timestamp), last_row(usage_user), last_row(usage_system), " +
 		"last_row(usage_idle), last_row(usage_nice), last_row(usage_iowait), last_row(usage_irq), " +
 		"last_row(usage_softirq), last_row(usage_steal), last_row(usage_guest), last_row(usage_guest_nice), " +
-		"hostname FROM benchmark.cpu GROUP BY hostname")
+		"hostname FROM benchmark.public.cpu GROUP BY hostname")
 }
 
 // single-groupby-5-1-12
@@ -290,7 +290,7 @@ func (p *processor) InitSingleGroupby_Host1() {
 	p.prepareStmt.Grow(350)
 	p.prepareStmt.WriteString(`SELECT time_bucket(k_timestamp, '60s') as k_timestamp, 
     max(usage_user), max(usage_system), max(usage_idle), max(usage_nice), 
-    max(usage_iowait) FROM benchmark.cpu 
+    max(usage_iowait) FROM benchmark.public.cpu 
     WHERE hostname=$1 AND k_timestamp >= $2 AND 
     k_timestamp < $3 GROUP BY time_bucket(k_timestamp, '60s')
     ORDER BY time_bucket(k_timestamp, '60s')`)
@@ -303,7 +303,7 @@ func (p *processor) InitSingleGroupby_Host1() {
 func (p *processor) InitSingleGroupby_Hosts() {
 	p.prepareStmt.Grow(350)
 	p.prepareStmt.WriteString("SELECT time_bucket(k_timestamp, '60s') as k_timestamp, max(usage_user), " +
-		"max(usage_system), max(usage_idle), max(usage_nice), max(usage_iowait) FROM benchmark.cpu WHERE " +
+		"max(usage_system), max(usage_idle), max(usage_nice), max(usage_iowait) FROM benchmark.public.cpu WHERE " +
 		"hostname IN ($1,$2,$3,$4,$5,$6,$7,$8) AND k_timestamp >= $9 AND k_timestamp < $10 " +
 		"GROUP BY time_bucket(k_timestamp,'60s') ORDER BY time_bucket(k_timestamp,'60s')")
 	p.formatBuf = make([]int16, 10)

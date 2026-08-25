@@ -71,7 +71,7 @@ func (d *Devops) GroupByTime(qi query.Query, nHosts, numMetrics int, timeRange t
 	if nHosts == 1 {
 		panicIfErr(err)
 		if !prepare {
-			sql = fmt.Sprintf(`SELECT time_bucket(k_timestamp, '60s') as k_timestamp, %s FROM %s.cpu WHERE hostname='%s' AND k_timestamp >= '%s' AND k_timestamp < '%s' GROUP BY time_bucket(k_timestamp, '60s') ORDER BY time_bucket(k_timestamp, '60s')`,
+			sql = fmt.Sprintf(`SELECT time_bucket(k_timestamp, '60s') as k_timestamp, %s FROM %s.public.cpu WHERE hostname='%s' AND k_timestamp >= '%s' AND k_timestamp < '%s' GROUP BY time_bucket(k_timestamp, '60s') ORDER BY time_bucket(k_timestamp, '60s')`,
 				strings.Join(selectClauses, ", "),
 				d.CPUDBName,
 				hostnames[0],
@@ -85,7 +85,7 @@ func (d *Devops) GroupByTime(qi query.Query, nHosts, numMetrics int, timeRange t
 		}
 	} else {
 		if !prepare {
-			sql = fmt.Sprintf(`SELECT time_bucket(k_timestamp, '60s') as k_timestamp, %s FROM %s.cpu WHERE hostname IN (%s) AND k_timestamp >= '%s' AND k_timestamp < '%s' GROUP BY time_bucket(k_timestamp,'60s') ORDER BY time_bucket(k_timestamp,'60s')`,
+			sql = fmt.Sprintf(`SELECT time_bucket(k_timestamp, '60s') as k_timestamp, %s FROM %s.public.cpu WHERE hostname IN (%s) AND k_timestamp >= '%s' AND k_timestamp < '%s' GROUP BY time_bucket(k_timestamp,'60s') ORDER BY time_bucket(k_timestamp,'60s')`,
 				strings.Join(selectClauses, ", "),
 				d.CPUDBName,
 				"'"+strings.Join(hostnames, "', '")+"'",
@@ -112,7 +112,7 @@ func (d *Devops) GroupByOrderByLimit(qi query.Query) {
 	}
 	var sql string
 	if !prepare {
-		sql = fmt.Sprintf(`SELECT time_bucket(k_timestamp, '60s') as k_timestamp, max(usage_user) FROM %s.cpu WHERE k_timestamp < '%s' GROUP BY time_bucket(k_timestamp, '60s') ORDER BY time_bucket(k_timestamp, '60s') LIMIT 5`,
+		sql = fmt.Sprintf(`SELECT time_bucket(k_timestamp, '60s') as k_timestamp, max(usage_user) FROM %s.public.cpu WHERE k_timestamp < '%s' GROUP BY time_bucket(k_timestamp, '60s') ORDER BY time_bucket(k_timestamp, '60s') LIMIT 5`,
 			d.CPUDBName,
 			parseTime(time.UnixMilli(interval.EndUnixMillis()).UTC()))
 	} else {
@@ -137,7 +137,7 @@ func (d *Devops) GroupByTimeAndPrimaryTag(qi query.Query, numMetrics int) {
 	selectClauses := d.getSelectClausesAggMetrics("avg", metrics)
 	var sql string
 	if !prepare {
-		sql = fmt.Sprintf(`SELECT time_bucket(k_timestamp, '3600s') as k_timestamp, hostname, %s FROM %s.cpu WHERE k_timestamp >= '%s' AND k_timestamp < '%s' GROUP BY hostname, time_bucket(k_timestamp, '3600s') ORDER BY hostname, time_bucket(k_timestamp, '3600s')`,
+		sql = fmt.Sprintf(`SELECT time_bucket(k_timestamp, '3600s') as k_timestamp, hostname, %s FROM %s.public.cpu WHERE k_timestamp >= '%s' AND k_timestamp < '%s' GROUP BY hostname, time_bucket(k_timestamp, '3600s') ORDER BY hostname, time_bucket(k_timestamp, '3600s')`,
 			strings.Join(selectClauses, ", "),
 			d.CPUDBName,
 			parseTime(time.UnixMilli(interval.StartUnixMillis()).UTC()),
@@ -174,7 +174,7 @@ func (d *Devops) MaxAllCPU(qi query.Query, nHosts int, duration time.Duration) {
 	}
 	if nHosts == 1 {
 		if !prepare {
-			sql = fmt.Sprintf(`SELECT time_bucket(k_timestamp, '3600s') as k_timestamp, %s FROM %s.cpu WHERE hostname = '%s' AND k_timestamp >= '%s' AND k_timestamp < '%s' GROUP BY time_bucket(k_timestamp, '3600s') ORDER BY time_bucket(k_timestamp, '3600s')`,
+			sql = fmt.Sprintf(`SELECT time_bucket(k_timestamp, '3600s') as k_timestamp, %s FROM %s.public.cpu WHERE hostname = '%s' AND k_timestamp >= '%s' AND k_timestamp < '%s' GROUP BY time_bucket(k_timestamp, '3600s') ORDER BY time_bucket(k_timestamp, '3600s')`,
 				strings.Join(selectClauses, ", "),
 				d.CPUDBName,
 				hostnames[0],
@@ -188,7 +188,7 @@ func (d *Devops) MaxAllCPU(qi query.Query, nHosts int, duration time.Duration) {
 		}
 	} else {
 		if !prepare {
-			sql = fmt.Sprintf(`SELECT time_bucket(k_timestamp, '3600s') as k_timestamp, %s FROM %s.cpu WHERE hostname IN (%s) AND k_timestamp >= '%s' AND k_timestamp < '%s' GROUP BY time_bucket(k_timestamp, '3600s') ORDER BY time_bucket(k_timestamp, '3600s')`,
+			sql = fmt.Sprintf(`SELECT time_bucket(k_timestamp, '3600s') as k_timestamp, %s FROM %s.public.cpu WHERE hostname IN (%s) AND k_timestamp >= '%s' AND k_timestamp < '%s' GROUP BY time_bucket(k_timestamp, '3600s') ORDER BY time_bucket(k_timestamp, '3600s')`,
 				strings.Join(selectClauses, ", "),
 				d.CPUDBName,
 				"'"+strings.Join(hostnames, "', '")+"'",
@@ -219,7 +219,7 @@ func (d *Devops) LastPointPerHost(qi query.Query) {
 	}
 	var sql string
 	if !prepare {
-		sql = fmt.Sprintf(`SELECT hostname, last_row(k_timestamp), %s FROM %s.cpu GROUP BY hostname`,
+		sql = fmt.Sprintf(`SELECT hostname, last_row(k_timestamp), %s FROM %s.public.cpu GROUP BY hostname`,
 			strings.Join(selectClauses, ", "),
 			d.CPUDBName)
 	} else {
@@ -249,7 +249,7 @@ func (d *Devops) HighCPUForHosts(qi query.Query, nHosts int) {
 		hostnames, err := d.GetRandomHosts(nHosts)
 		panicIfErr(err)
 		if !prepare {
-			sql = fmt.Sprintf(`SELECT k_timestamp,usage_user,usage_system,usage_idle,usage_nice,usage_iowait,usage_irq,usage_softirq,usage_steal,usage_guest,usage_guest_nice FROM %s.cpu WHERE hostname='%s' AND usage_user > 90.0 AND k_timestamp >= '%s' AND k_timestamp < '%s'`,
+			sql = fmt.Sprintf(`SELECT k_timestamp,usage_user,usage_system,usage_idle,usage_nice,usage_iowait,usage_irq,usage_softirq,usage_steal,usage_guest,usage_guest_nice FROM %s.public.cpu WHERE hostname='%s' AND usage_user > 90.0 AND k_timestamp >= '%s' AND k_timestamp < '%s'`,
 				d.CPUDBName,
 				hostnames[0],
 				parseTime(time.UnixMilli(interval.StartUnixMillis()).UTC()),
@@ -262,7 +262,7 @@ func (d *Devops) HighCPUForHosts(qi query.Query, nHosts int) {
 		}
 	} else {
 		if !prepare {
-			sql = fmt.Sprintf(`SELECT k_timestamp,usage_user,usage_system,usage_idle,usage_nice,usage_iowait,usage_irq,usage_softirq,usage_steal,usage_guest,usage_guest_nice FROM %s.cpu WHERE usage_user > 90.0 AND k_timestamp >= '%s' AND k_timestamp < '%s'`,
+			sql = fmt.Sprintf(`SELECT k_timestamp,usage_user,usage_system,usage_idle,usage_nice,usage_iowait,usage_irq,usage_softirq,usage_steal,usage_guest,usage_guest_nice FROM %s.public.cpu WHERE usage_user > 90.0 AND k_timestamp >= '%s' AND k_timestamp < '%s'`,
 				d.CPUDBName,
 				parseTime(time.UnixMilli(interval.StartUnixMillis()).UTC()),
 				parseTime(time.UnixMilli(interval.EndUnixMillis()).UTC()))
