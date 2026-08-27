@@ -30,7 +30,7 @@ type statProcessorArgs struct {
 	burnIn           uint64  // burnIn is the number of statistics to ignore before analyzing
 	printInterval    uint64  // printInterval is how often print intermediate stats (number of queries)
 	hdrLatenciesFile string  // hdrLatenciesFile is the filename to Write the High Dynamic Range (HDR) Histogram of Response Latencies to
-
+	meanMode         string  // meanMode selects the mean calculation used in human-readable statistics
 }
 
 // statProcessor is used to collect, analyze, and print query execution statistics.
@@ -152,7 +152,7 @@ func (sp *defaultStatProcessor) process(workers uint) {
 			if err != nil {
 				log.Fatal(err)
 			}
-			err = writeStatGroupMap(os.Stderr, sp.statMapping)
+			err = writeStatGroupMap(os.Stderr, sp.statMapping, sp.args.meanMode)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -171,7 +171,7 @@ func (sp *defaultStatProcessor) process(workers uint) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	err = writeStatGroupMap(os.Stdout, sp.statMapping)
+	err = writeStatGroupMap(os.Stdout, sp.statMapping, sp.args.meanMode)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -98,20 +98,26 @@ func (s *statGroup) push(n float64) {
 	s.count++
 }
 
-// string makes a simple description of a statGroup.
-func (s *statGroup) string() string {
+// string makes a simple description of a statGroup using the selected mean mode.
+func (s *statGroup) string(meanMode string) string {
+	var mean float64
+	if meanMode == MeanModeTrimmed {
+		mean = s.TrimmedMean()
+	} else {
+		mean = s.Mean()
+	}
 	return fmt.Sprintf("min: %8.2fms, med: %8.2fms, mean: %8.2fms, max: %7.2fms, stddev: %8.2fms, sum: %5.1fsec, count: %d",
 		s.Min(),
 		s.Median(),
-		s.TrimmedMean(),
+		mean,
 		s.Max(),
 		s.StdDev(),
 		s.sum/hdrScaleFactor,
 		s.count)
 }
 
-func (s *statGroup) write(w io.Writer) error {
-	_, err := fmt.Fprintln(w, s.string())
+func (s *statGroup) write(w io.Writer, meanMode string) error {
+	_, err := fmt.Fprintln(w, s.string(meanMode))
 	return err
 }
 
@@ -151,7 +157,7 @@ func (s *statGroup) StdDev() float64 {
 
 // writeStatGroupMap writes a map of StatGroups in an ordered fashion by
 // key that they are stored by
-func writeStatGroupMap(w io.Writer, statGroups map[string]*statGroup) error {
+func writeStatGroupMap(w io.Writer, statGroups map[string]*statGroup, meanMode string) error {
 	maxKeyLength := 0
 	keys := make([]string, 0, len(statGroups))
 	for k := range statGroups {
@@ -168,12 +174,16 @@ func writeStatGroupMap(w io.Writer, statGroups map[string]*statGroup) error {
 			paddedKey += " "
 		}
 
-		_, err := fmt.Fprintf(w, "%s (mean excludes min/max):\n", paddedKey)
+		meanDescription := ""
+		if meanMode == MeanModeTrimmed {
+			meanDescription = " (mean excludes min/max)"
+		}
+		_, err := fmt.Fprintf(w, "%s%s:\n", paddedKey, meanDescription)
 		if err != nil {
 			return err
 		}
 
-		err = v.write(w)
+		err = v.write(w, meanMode)
 		if err != nil {
 			return err
 		}

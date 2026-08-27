@@ -272,7 +272,7 @@ func (w *errWriter) Write(p []byte) (int, error) {
 func TestWrite(t *testing.T) {
 	var buf bytes.Buffer
 	sg := newStatGroup(0)
-	err := sg.write(&buf)
+	err := sg.write(&buf, MeanModeStandard)
 	if err != nil {
 		t.Errorf("unexpected error for write: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestWrite(t *testing.T) {
 	}
 
 	// Test error case
-	err = sg.write(&errWriter{})
+	err = sg.write(&errWriter{}, MeanModeStandard)
 	if err == nil {
 		t.Errorf("expected error but did not get one")
 	}
@@ -348,7 +348,7 @@ func TestWriteStatGroupMap(t *testing.T) {
 		} else {
 			w = bytes.NewBuffer([]byte{})
 		}
-		err := writeStatGroupMap(w, m)
+		err := writeStatGroupMap(w, m, MeanModeStandard)
 		if shouldErr {
 			ew := w.(*errWriter)
 			if err == nil {
@@ -405,7 +405,7 @@ func TestWriteStatGroupMap(t *testing.T) {
 					if got := len(args); got != 2 {
 						t.Errorf("%s: invalid label line, more than 2 parts: got %s", c.desc, line)
 					}
-					label := strings.TrimSuffix(args[0], " (mean excludes min/max)")
+					label := args[0]
 					if got := len(label); got != c.numGroups {
 						t.Errorf("%s: invalid label, not padded: '%s' is only len %d, not %d", c.desc, label, len(label), c.numGroups)
 					}
