@@ -155,59 +155,64 @@ func TestStatGroupMedian0InitialSize(t *testing.T) {
 
 func TestStatGroupPush(t *testing.T) {
 	cases := []struct {
-		desc       string
-		vals       []float64
-		wantMin    float64
-		wantMax    float64
-		wantMean   float64
-		wantMedian float64
-		wantStdDev float64
-		wantCount  int64
-		wantSum    float64
+		desc            string
+		vals            []float64
+		wantMin         float64
+		wantMax         float64
+		wantMean        float64
+		wantTrimmedMean float64
+		wantMedian      float64
+		wantStdDev      float64
+		wantCount       int64
+		wantSum         float64
 	}{
 		{
-			desc:       "ordered smallest to largest",
-			vals:       []float64{2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0},
-			wantMin:    2.0,
-			wantMax:    9.0,
-			wantMean:   5.0,
-			wantMedian: 4.0,
-			wantStdDev: 2.0,
-			wantCount:  8,
-			wantSum:    40.0,
+			desc:            "ordered smallest to largest",
+			vals:            []float64{2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0},
+			wantMin:         2.0,
+			wantMax:         9.0,
+			wantMean:        5.0,
+			wantTrimmedMean: 29.0 / 6.0,
+			wantMedian:      4.0,
+			wantStdDev:      2.0,
+			wantCount:       8,
+			wantSum:         40.0,
 		},
 		{
-			desc:       "ordered largest to smallest",
-			vals:       []float64{9.0, 7.0, 5.0, 5.0, 4.0, 4.0, 4.0, 2.0},
-			wantMin:    2.0,
-			wantMax:    9.0,
-			wantMean:   5.0,
-			wantMedian: 4.0,
-			wantStdDev: 2.0,
-			wantCount:  8,
-			wantSum:    40.0,
+			desc:            "ordered largest to smallest",
+			vals:            []float64{9.0, 7.0, 5.0, 5.0, 4.0, 4.0, 4.0, 2.0},
+			wantMin:         2.0,
+			wantMax:         9.0,
+			wantMean:        5.0,
+			wantTrimmedMean: 29.0 / 6.0,
+			wantMedian:      4.0,
+			wantStdDev:      2.0,
+			wantCount:       8,
+			wantSum:         40.0,
 		},
 		{
-			desc:       "no variance",
-			vals:       []float64{10.0, 10.0, 10.0},
-			wantMin:    10.0,
-			wantMax:    10.0,
-			wantMean:   10.0,
-			wantMedian: 10.0,
-			wantStdDev: 0.0,
-			wantCount:  3,
-			wantSum:    30.0,
+			desc:            "no variance",
+			vals:            []float64{10.0, 10.0, 10.0},
+			wantMin:         10.0,
+			wantMax:         10.0,
+			wantMean:        10.0,
+			wantTrimmedMean: 10.0,
+			wantMedian:      10.0,
+			wantStdDev:      0.0,
+			wantCount:       3,
+			wantSum:         30.0,
 		},
 		{
-			desc:       "out of order",
-			vals:       []float64{12.0, 10.0, 10.0, 10.0, 8.0, 10.0, 10.0, 10.0},
-			wantMin:    8.0,
-			wantMax:    12.0,
-			wantMean:   10.0,
-			wantMedian: 10.0,
-			wantStdDev: 1.0,
-			wantCount:  8,
-			wantSum:    80.0,
+			desc:            "out of order",
+			vals:            []float64{12.0, 10.0, 10.0, 10.0, 8.0, 10.0, 10.0, 10.0},
+			wantMin:         8.0,
+			wantMax:         12.0,
+			wantMean:        10.0,
+			wantTrimmedMean: 10.0,
+			wantMedian:      10.0,
+			wantStdDev:      1.0,
+			wantCount:       8,
+			wantSum:         80.0,
 		},
 	}
 
@@ -224,6 +229,9 @@ func TestStatGroupPush(t *testing.T) {
 		}
 		if got := sg.Mean(); got != c.wantMean {
 			t.Errorf("%s: incorrect Mean: got %f want %f", c.desc, got, c.wantMin)
+		}
+		if got := sg.TrimmedMean(); got != c.wantTrimmedMean {
+			t.Errorf("%s: incorrect TrimmedMean: got %f want %f", c.desc, got, c.wantTrimmedMean)
 		}
 		if got := sg.Median(); got != c.wantMedian {
 			t.Errorf("%s: incorrect Median: got %f want %f", c.desc, got, c.wantMedian)
@@ -397,8 +405,9 @@ func TestWriteStatGroupMap(t *testing.T) {
 					if got := len(args); got != 2 {
 						t.Errorf("%s: invalid label line, more than 2 parts: got %s", c.desc, line)
 					}
-					if got := len(args[0]); got != c.numGroups {
-						t.Errorf("%s: invalid label, not padded: '%s' is only len %d, not %d", c.desc, args[0], len(args[0]), c.numGroups)
+					label := strings.TrimSuffix(args[0], " (mean excludes min/max)")
+					if got := len(label); got != c.numGroups {
+						t.Errorf("%s: invalid label, not padded: '%s' is only len %d, not %d", c.desc, label, len(label), c.numGroups)
 					}
 				}
 			}

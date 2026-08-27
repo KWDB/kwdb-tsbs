@@ -65,6 +65,8 @@ type statGroup struct {
 	latencyHDRHistogram *hdrhistogram.Histogram
 	sum                 float64
 	count               int64
+	minValue            float64
+	maxValue            float64
 }
 
 // newStatGroup returns a new StatGroup with an initial size
@@ -86,6 +88,12 @@ func newStatGroup(size uint64) *statGroup {
 // push updates a StatGroup with a new value.
 func (s *statGroup) push(n float64) {
 	s.latencyHDRHistogram.RecordValue(int64(n * hdrScaleFactor))
+	if s.count == 0 || n < s.minValue {
+		s.minValue = n
+	}
+	if s.count == 0 || n > s.maxValue {
+		s.maxValue = n
+	}
 	s.sum += n
 	s.count++
 }
@@ -95,7 +103,7 @@ func (s *statGroup) string() string {
 	return fmt.Sprintf("min: %8.2fms, med: %8.2fms, mean: %8.2fms, max: %7.2fms, stddev: %8.2fms, sum: %5.1fsec, count: %d",
 		s.Min(),
 		s.Median(),
-		s.Mean(),
+		s.TrimmedMean(),
 		s.Max(),
 		s.StdDev(),
 		s.sum/hdrScaleFactor,
@@ -115,6 +123,15 @@ func (s *statGroup) Median() float64 {
 // Mean returns the Mean value of the StatGroup in milliseconds
 func (s *statGroup) Mean() float64 {
 	return float64(s.latencyHDRHistogram.Mean()) / hdrScaleFactor
+}
+
+// TrimmedMean returns the mean after excluding one minimum and one maximum
+// measurement. For fewer than three measurements, it falls back to Mean.
+func (s *statGroup) TrimmedMean() float64 {
+	if s.count < 3 {
+		return s.Mean()
+	}
+	return (s.sum - s.minValue - s.maxValue) / float64(s.count-2)
 }
 
 // Max returns the Max value of the StatGroup in milliseconds
@@ -151,7 +168,7 @@ func writeStatGroupMap(w io.Writer, statGroups map[string]*statGroup) error {
 			paddedKey += " "
 		}
 
-		_, err := fmt.Fprintf(w, "%s:\n", paddedKey)
+		_, err := fmt.Fprintf(w, "%s (mean excludes min/max):\n", paddedKey)
 		if err != nil {
 			return err
 		}
