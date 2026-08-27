@@ -19,6 +19,8 @@ const (
 	labelAllQueries  = "all queries"
 	labelColdQueries = "cold queries"
 	labelWarmQueries = "warm queries"
+	MeanModeStandard = "standard"
+	MeanModeTrimmed  = "trimmed"
 
 	defaultReadSize = 4 << 20 // 4 MB
 )
@@ -38,6 +40,7 @@ type BenchmarkRunnerConfig struct {
 	PrintInterval    uint64 `mapstructure:"print-interval"`
 	PrewarmQueries   bool   `mapstructure:"prewarm-queries"`
 	ResultsFile      string `mapstructure:"results-file"`
+	MeanMode         string `mapstructure:"mean-mode"`
 	Prepare          bool
 }
 
@@ -56,6 +59,7 @@ func (c BenchmarkRunnerConfig) AddToFlagSet(fs *pflag.FlagSet) {
 	fs.Int("debug", 0, "Whether to print debug messages.")
 	fs.String("file", "", "File name to read queries from")
 	fs.String("results-file", "", "Write the test results summary json to this file")
+	fs.String("mean-mode", MeanModeStandard, "Mean calculation mode: standard or trimmed (excludes one minimum and one maximum value)")
 	fs.String("query-type", "", "")
 	fs.Bool("prepare", false, "")
 	fs.String("compress", "off", "")
@@ -74,6 +78,12 @@ type BenchmarkRunner struct {
 // NewBenchmarkRunner creates a new instance of BenchmarkRunner which is
 // common functionality to be used by query benchmarker programs
 func NewBenchmarkRunner(config BenchmarkRunnerConfig) *BenchmarkRunner {
+	if config.MeanMode == "" {
+		config.MeanMode = MeanModeStandard
+	}
+	if config.MeanMode != MeanModeStandard && config.MeanMode != MeanModeTrimmed {
+		panic(fmt.Sprintf("invalid mean mode %q: must be %q or %q", config.MeanMode, MeanModeStandard, MeanModeTrimmed))
+	}
 	runner := &BenchmarkRunner{BenchmarkRunnerConfig: config}
 	runner.scanner = newScanner(&runner.Limit)
 	spArgs := &statProcessorArgs{
@@ -82,6 +92,7 @@ func NewBenchmarkRunner(config BenchmarkRunnerConfig) *BenchmarkRunner {
 		prewarmQueries:   runner.PrewarmQueries,
 		burnIn:           runner.BurnIn,
 		hdrLatenciesFile: runner.HDRLatenciesFile,
+		meanMode:         runner.MeanMode,
 	}
 
 	runner.sp = newStatProcessor(spArgs)
