@@ -57,14 +57,15 @@ func (fa *fixedArgList) Length() int {
 }
 
 type prepareProcessor struct {
-	opts        *LoadingOptions
-	dbName      string
-	sci         *syncCSI
-	_db         *commonpool.Conn
-	deviceNum   int
-	preparedSql map[string]struct{}
-	prepareStmt strings.Builder
-	workerIndex int
+	opts              *LoadingOptions
+	dbName            string
+	sci               *syncCSI
+	_db               *commonpool.Conn
+	deviceNum         int
+	preparedSql       map[string]struct{}
+	prepareStmt       strings.Builder
+	workerIndex       int
+	writeLatencyStats *writeLatencyStats
 
 	// prepare buff
 	buffer     map[string]*fixedArgList // tableName, fixedArgList
@@ -87,6 +88,7 @@ func (p *prepareProcessor) Init(workerNum int, doLoad, _ bool) {
 	if !doLoad {
 		return
 	}
+	p.writeLatencyStats = p.opts.writeLatencyRecorder.worker(workerNum)
 
 	p.prepareStmt.Grow(Size1M)
 
@@ -284,7 +286,9 @@ func (p *prepareProcessor) createPrepareSql(deviecName string) {
 }
 
 func (p *prepareProcessor) execPrepareStmt(tableName string, args [][]byte) {
+	start := p.writeLatencyStats.start()
 	res := p._db.Connection.PgConn().ExecPrepared(context.Background(), "insertall"+tableName, args, p.formatBuf, nil).Read()
+	p.writeLatencyStats.finish(start)
 	if res.Err != nil {
 		panic(res.Err)
 	}

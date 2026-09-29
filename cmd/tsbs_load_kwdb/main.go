@@ -46,6 +46,7 @@ func initProgramOptions() (*kwdb.LoadingOptions, load.BenchmarkRunner, *load.Ben
 	opts.Preparesize = viper.GetInt("preparesize")
 	opts.CertDir = viper.GetString("certdir")
 	opts.Partition = viper.GetBool("partition")
+	opts.WriteLatency = viper.GetBool("write-latency")
 	loaderConf.HashWorkers = true
 	loaderConf.NoFlowControl = true
 	loaderConf.ChannelCapacity = 50
@@ -71,6 +72,7 @@ func main() {
 		panic(err)
 	}
 	loader.RunBenchmark(benchmark)
+	kwdb.ReportWriteLatency(benchmark)
 
 	_db, err := commonpool.GetConnection(opts.User, opts.Pass, opts.Host, opts.CertDir, opts.Port)
 

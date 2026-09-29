@@ -22,17 +22,25 @@ func NewBenchmark(dbName string, opts *LoadingOptions, dataSourceConfig *source.
 		panic("not implement")
 	}
 
+	var latencyRecorder *writeLatencyRecorder
+	if opts.WriteLatency {
+		latencyRecorder = newWriteLatencyRecorder(opts.Workers)
+		opts.writeLatencyRecorder = latencyRecorder
+	}
+
 	return &benchmark{
-		opts:   opts,
-		ds:     ds,
-		dbName: dbName,
+		opts:                 opts,
+		ds:                   ds,
+		dbName:               dbName,
+		writeLatencyRecorder: latencyRecorder,
 	}, nil
 }
 
 type benchmark struct {
-	opts   *LoadingOptions
-	ds     targets.DataSource
-	dbName string
+	opts                 *LoadingOptions
+	ds                   targets.DataSource
+	dbName               string
+	writeLatencyRecorder *writeLatencyRecorder
 }
 
 func (b *benchmark) GetDataSource() targets.DataSource {
