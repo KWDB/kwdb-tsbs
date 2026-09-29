@@ -29,6 +29,7 @@ func (t *kwdbTarget) TargetSpecificFlags(flagPrefix string, flagSet *pflag.FlagS
 	flagSet.Int(flagPrefix+"preparesize", 1000, "Prepare batch size ")
 	flagSet.String(flagPrefix+"certdir", "", "Dir of cert files")
 	flagSet.String(flagPrefix+"partition", "true", "alter table partition by hashpoint p0 p1 p2")
+	flagSet.Bool(flagPrefix+"write-latency", true, "Collect per-row client-side write latency (mean, p50, p99, p99.9)")
 }
 
 func (t *kwdbTarget) TargetName() string {

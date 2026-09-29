@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/timescale/tsbs/pkg/targets"
 	"github.com/timescale/tsbs/pkg/targets/kwdb/commonpool"
@@ -32,12 +33,23 @@ type Ctx struct {
 var globalSCI = &syncCSI{}
 
 type processorInsert struct {
-	opts   *LoadingOptions
-	dbName string
-	sci    *syncCSI
-	_db    *commonpool.Conn
-	wg     *sync.WaitGroup
-	buf    *bytes.Buffer
+	opts              *LoadingOptions
+	dbName            string
+	sci               *syncCSI
+	_db               *commonpool.Conn
+	wg                *sync.WaitGroup
+	buf               *bytes.Buffer
+	writeLatencyStats *writeLatencyStats
+}
+
+func (p *processorInsert) execData(sql string, rows int) error {
+	start := time.Now()
+	_, err := p._db.Connection.Exec(context.Background(), sql)
+	elapsed := time.Since(start)
+	if err == nil {
+		p.writeLatencyStats.record(elapsed, rows)
+	}
+	return err
 }
 
 func newProcessorInsert(opts *LoadingOptions, dbName string) *processorInsert {
@@ -47,6 +59,9 @@ func newProcessorInsert(opts *LoadingOptions, dbName string) *processorInsert {
 func (p *processorInsert) Init(proNum int, doLoad, _ bool) {
 	if !doLoad {
 		return
+	}
+	if p.opts.WriteLatency {
+		p.writeLatencyStats = p.opts.writeLatencyRecorder.worker(proNum)
 	}
 	p.buf.Grow(Size1M)
 	var err error
@@ -109,6 +124,7 @@ func (p *processorInsert) ProcessBatch(b targets.Batch, doLoad bool) (metricCoun
 		sql1 := fmt.Sprintf("insert into %s.cpu (k_timestamp,%s,hostname) values", p.dbName, tagsname)
 		sql2 := sql1
 		cnt1, cnt2 := 0, 0
+		rows1, rows2 := 0, 0
 		for hostname, sqls := range batches.m {
 			rowCnt += uint64(len(sqls))
 			// var csvSQL string
@@ -119,6 +135,7 @@ func (p *processorInsert) ProcessBatch(b targets.Batch, doLoad bool) (metricCoun
 				<-v.(*Ctx).c.Done()
 				sql1 += csvSQL + ","
 				cnt1++
+				rows1 += len(sqls)
 			} else {
 				// wait for allTag data inserted
 				allTagC, allTagCancel := context.WithCancel(context.Background())
@@ -131,19 +148,30 @@ func (p *processorInsert) ProcessBatch(b targets.Batch, doLoad bool) (metricCoun
 
 				sql2 += csvSQL + ","
 				cnt2++
+				rows2 += len(sqls)
 			}
 		}
 		if cnt1+cnt2 == len(batches.m) {
 			if cnt1 != 0 {
 				sql1 = sql1[:len(sql1)-1]
-				_, err := p._db.Connection.Exec(context.Background(), sql1)
+				var err error
+				if p.writeLatencyStats == nil {
+					_, err = p._db.Connection.Exec(context.Background(), sql1)
+				} else {
+					err = p.execData(sql1, rows1)
+				}
 				if err != nil {
 					panic(fmt.Sprintf("kwdb insert data failed!,err :%s", err))
 				}
 			}
 			if cnt2 != 0 {
 				sql2 = sql2[:len(sql2)-1]
-				_, err2 := p._db.Connection.Exec(context.Background(), sql2)
+				var err2 error
+				if p.writeLatencyStats == nil {
+					_, err2 = p._db.Connection.Exec(context.Background(), sql2)
+				} else {
+					err2 = p.execData(sql2, rows2)
+				}
 				if err2 != nil {
 					panic(fmt.Sprintf("kwdb insert data failed!,err :%s", err2))
 				}
@@ -203,6 +231,7 @@ func (p *processorInsert) ProcessBatch(b targets.Batch, doLoad bool) (metricCoun
 		fmt.Fprintf(&b3, readingsPrefix, p.dbName)
 		fmt.Fprintf(&b4, diagnosticsPrefix, p.dbName)
 		cnt1, cnt2 := 0, 0
+		var rows1, rows2, rows3, rows4 int
 		for hostname, sqls := range batches.m {
 			rowCnt += uint64(len(sqls))
 			csvSQL := strings.Join(sqls, ",")
@@ -211,8 +240,10 @@ func (p *processorInsert) ProcessBatch(b targets.Batch, doLoad bool) (metricCoun
 				<-v.(*Ctx).c.Done()
 				if strings.HasPrefix(hostname, readingsSuffix) {
 					b1.WriteString(csvSQL)
+					rows1 += len(sqls)
 				} else { //means diagnostics
 					b2.WriteString(csvSQL)
+					rows2 += len(sqls)
 				}
 				cnt1 += len(sqls)
 			} else {
@@ -227,16 +258,23 @@ func (p *processorInsert) ProcessBatch(b targets.Batch, doLoad bool) (metricCoun
 
 				if strings.HasPrefix(hostname, readingsSuffix) {
 					b3.WriteString(csvSQL)
+					rows3 += len(sqls)
 				} else { //means diagnostics
 					b4.WriteString(csvSQL)
+					rows4 += len(sqls)
 				}
 				cnt2++
 			}
 		}
 		if cnt1+cnt2 == int(batches.cnt) {
-			execSQL := func(sqlStr strings.Builder, expectedLen int, sqlType string) {
+			execSQL := func(sqlStr strings.Builder, expectedLen int, sqlType string, rows int) {
 				if sqlStr.Len() != expectedLen {
-					_, err := p._db.Connection.Exec(context.Background(), sqlStr.String())
+					var err error
+					if p.writeLatencyStats == nil {
+						_, err = p._db.Connection.Exec(context.Background(), sqlStr.String())
+					} else {
+						err = p.execData(sqlStr.String(), rows)
+					}
 					if err != nil {
 						fmt.Println(expectedLen, sqlStr.Len())
 						panic(fmt.Sprintf("kwdb insert %s data failed! err: %s", sqlType, err))
@@ -244,12 +282,12 @@ func (p *processorInsert) ProcessBatch(b targets.Batch, doLoad bool) (metricCoun
 				}
 			}
 
-			execSQL(b1, LenReadings+len(p.dbName), "readings1")
-			execSQL(b2, LenDiagnostics+len(p.dbName), "diagnostics1")
+			execSQL(b1, LenReadings+len(p.dbName), "readings1", rows1)
+			execSQL(b2, LenDiagnostics+len(p.dbName), "diagnostics1", rows2)
 
 			if cnt2 != 0 {
-				execSQL(b3, LenReadings+len(p.dbName), "readings2")
-				execSQL(b4, LenDiagnostics+len(p.dbName), "diagnostics2")
+				execSQL(b3, LenReadings+len(p.dbName), "readings2", rows3)
+				execSQL(b4, LenDiagnostics+len(p.dbName), "diagnostics2", rows4)
 			}
 		}
 

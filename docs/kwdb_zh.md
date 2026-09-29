@@ -106,6 +106,14 @@ cpu-only/iot
 #### `-batch-size/-preparesize` （类型：`int`）
 每批次写入的数据量。若使用 --insert-type=prepare，需替换为 --preparesize。
 
+#### `--write-latency` （类型：`bool`，默认值：`true`）
+
+统计客户端每行写入时延，支持 insert、prepare 和 prepareiot。设为 `false` 可关闭。
+每次数据写请求执行前开始计时，完整读取成功响应后结束计时，将耗时除以该请求实际写入的数据行数，作为一个样本。
+prepare 模式使用一次实际执行的行数（由 `preparesize` 决定），普通 insert 拆分请求、IoT 分表和不足一批的请求也分别按实际行数换算。
+所有 worker 结束后，仅输出这些样本的 mean、P50、P99、P99.9，单位为 `us/row`（微秒/行）。批大小固定时，等价于整批时延的对应统计值除以批大小；批大小不同时，先逐请求换算再统计，每个成功请求贡献一个样本。
+分位数采用无锁固定分桶估算，桶分辨率为纳秒、桶相对误差约不超过 1.6%。失败请求、建表和标签初始化不计入时延统计，原有导入速率计算保持不变。
+
 #### `-workers` （类型：`int`）
 并发写入数，建议与 tsbs_generate_data 的 orderquantity 保持一致。
 
