@@ -21,26 +21,28 @@ type writeLatencyRecorder struct {
 }
 
 func newWriteLatencyHistogram() *hdrhistogram.Histogram {
-	return hdrhistogram.New(1, maxWriteLatency.Microseconds(), 4)
+	return hdrhistogram.New(1, maxWriteLatency.Microseconds(), 3)
 }
 
 func newWriteLatencyRecorder(workerCount int) *writeLatencyRecorder {
-	recorder := &writeLatencyRecorder{
+	return &writeLatencyRecorder{
 		workers: make([]*writeLatencyStats, workerCount),
 	}
-	for i := range recorder.workers {
-		recorder.workers[i] = &writeLatencyStats{
-			histogram: newWriteLatencyHistogram(),
-		}
-	}
-	return recorder
 }
 
 func (r *writeLatencyRecorder) worker(workerNum int) *writeLatencyStats {
 	if r == nil || workerNum < 0 || workerNum >= len(r.workers) {
 		return nil
 	}
-	return r.workers[workerNum]
+
+	// Each worker initializes its own histogram after RunBenchmark has started
+	// timing. Keeping the large histogram allocation out of benchmark setup
+	// prevents it from changing the Go GC heap goal before the timed load.
+	stats := &writeLatencyStats{
+		histogram: newWriteLatencyHistogram(),
+	}
+	r.workers[workerNum] = stats
+	return stats
 }
 
 func (s *writeLatencyStats) record(elapsed time.Duration) {
@@ -71,6 +73,9 @@ func (s *writeLatencyStats) finish(start time.Time) {
 func (r *writeLatencyRecorder) print() {
 	histogram := newWriteLatencyHistogram()
 	for _, worker := range r.workers {
+		if worker == nil {
+			continue
+		}
 		// All workers have stopped before reporting, and every histogram uses
 		// the same range, so merging is safe and cannot drop values.
 		histogram.Merge(worker.histogram)
