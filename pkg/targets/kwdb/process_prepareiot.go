@@ -6,6 +6,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/timescale/tsbs/pkg/targets"
 	"github.com/timescale/tsbs/pkg/targets/kwdb/commonpool"
@@ -64,7 +65,9 @@ func (p *prepareProcessoriot) Init(workerNum int, doLoad, _ bool) {
 	if !doLoad {
 		return
 	}
-	p.writeLatencyStats = p.opts.writeLatencyRecorder.worker(workerNum)
+	if p.opts.WriteLatency {
+		p.writeLatencyStats = p.opts.writeLatencyRecorder.worker(workerNum)
+	}
 	p.prepareStmtReadings.Grow(Size1M)
 	for i := 0; i < p.opts.Preparesize; i++ {
 		p.prepareStmtReadings.WriteString(fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
@@ -540,14 +543,29 @@ func (p *prepareProcessoriot) createPrepareSql(deviecName string) {
 }
 
 func (p *prepareProcessoriot) execPrepareStmt(tableName string, args [][]byte) {
-	start := p.writeLatencyStats.start()
 	if tableName == "readings" {
+		if p.writeLatencyStats == nil {
+			res := p._db.Connection.PgConn().ExecPrepared(context.Background(), "insertallreadings", args, p.formatBufReadings, []int16{}).Read()
+			if res.Err != nil {
+				panic(res.Err)
+			}
+			return
+		}
+		start := time.Now()
 		res := p._db.Connection.PgConn().ExecPrepared(context.Background(), "insertallreadings", args, p.formatBufReadings, []int16{}).Read()
 		p.writeLatencyStats.finish(start)
 		if res.Err != nil {
 			panic(res.Err)
 		}
 	} else {
+		if p.writeLatencyStats == nil {
+			res := p._db.Connection.PgConn().ExecPrepared(context.Background(), "insertalldiagnostics", args, p.formatBufDiagnostics, []int16{}).Read()
+			if res.Err != nil {
+				panic(res.Err)
+			}
+			return
+		}
+		start := time.Now()
 		res := p._db.Connection.PgConn().ExecPrepared(context.Background(), "insertalldiagnostics", args, p.formatBufDiagnostics, []int16{}).Read()
 		p.writeLatencyStats.finish(start)
 		if res.Err != nil {

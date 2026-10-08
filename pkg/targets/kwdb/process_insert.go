@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/timescale/tsbs/pkg/targets"
 	"github.com/timescale/tsbs/pkg/targets/kwdb/commonpool"
@@ -42,7 +43,7 @@ type processorInsert struct {
 }
 
 func (p *processorInsert) execData(sql string) error {
-	start := p.writeLatencyStats.start()
+	start := time.Now()
 	_, err := p._db.Connection.Exec(context.Background(), sql)
 	p.writeLatencyStats.finish(start)
 	return err
@@ -56,7 +57,9 @@ func (p *processorInsert) Init(proNum int, doLoad, _ bool) {
 	if !doLoad {
 		return
 	}
-	p.writeLatencyStats = p.opts.writeLatencyRecorder.worker(proNum)
+	if p.opts.WriteLatency {
+		p.writeLatencyStats = p.opts.writeLatencyRecorder.worker(proNum)
+	}
 	p.buf.Grow(Size1M)
 	var err error
 	p._db, err = commonpool.GetConnection(p.opts.User, p.opts.Pass, p.opts.Host, p.opts.CertDir, p.opts.Port)
@@ -145,14 +148,24 @@ func (p *processorInsert) ProcessBatch(b targets.Batch, doLoad bool) (metricCoun
 		if cnt1+cnt2 == len(batches.m) {
 			if cnt1 != 0 {
 				sql1 = sql1[:len(sql1)-1]
-				err := p.execData(sql1)
+				var err error
+				if p.writeLatencyStats == nil {
+					_, err = p._db.Connection.Exec(context.Background(), sql1)
+				} else {
+					err = p.execData(sql1)
+				}
 				if err != nil {
 					panic(fmt.Sprintf("kwdb insert data failed!,err :%s", err))
 				}
 			}
 			if cnt2 != 0 {
 				sql2 = sql2[:len(sql2)-1]
-				err2 := p.execData(sql2)
+				var err2 error
+				if p.writeLatencyStats == nil {
+					_, err2 = p._db.Connection.Exec(context.Background(), sql2)
+				} else {
+					err2 = p.execData(sql2)
+				}
 				if err2 != nil {
 					panic(fmt.Sprintf("kwdb insert data failed!,err :%s", err2))
 				}
@@ -245,7 +258,12 @@ func (p *processorInsert) ProcessBatch(b targets.Batch, doLoad bool) (metricCoun
 		if cnt1+cnt2 == int(batches.cnt) {
 			execSQL := func(sqlStr strings.Builder, expectedLen int, sqlType string) {
 				if sqlStr.Len() != expectedLen {
-					err := p.execData(sqlStr.String())
+					var err error
+					if p.writeLatencyStats == nil {
+						_, err = p._db.Connection.Exec(context.Background(), sqlStr.String())
+					} else {
+						err = p.execData(sqlStr.String())
+					}
 					if err != nil {
 						fmt.Println(expectedLen, sqlStr.Len())
 						panic(fmt.Sprintf("kwdb insert %s data failed! err: %s", sqlType, err))

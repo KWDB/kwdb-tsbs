@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/timescale/tsbs/pkg/targets"
 	"github.com/timescale/tsbs/pkg/targets/kwdb/commonpool"
@@ -88,7 +89,9 @@ func (p *prepareProcessor) Init(workerNum int, doLoad, _ bool) {
 	if !doLoad {
 		return
 	}
-	p.writeLatencyStats = p.opts.writeLatencyRecorder.worker(workerNum)
+	if p.opts.WriteLatency {
+		p.writeLatencyStats = p.opts.writeLatencyRecorder.worker(workerNum)
+	}
 
 	p.prepareStmt.Grow(Size1M)
 
@@ -286,7 +289,15 @@ func (p *prepareProcessor) createPrepareSql(deviecName string) {
 }
 
 func (p *prepareProcessor) execPrepareStmt(tableName string, args [][]byte) {
-	start := p.writeLatencyStats.start()
+	if p.writeLatencyStats == nil {
+		res := p._db.Connection.PgConn().ExecPrepared(context.Background(), "insertall"+tableName, args, p.formatBuf, nil).Read()
+		if res.Err != nil {
+			panic(res.Err)
+		}
+		return
+	}
+
+	start := time.Now()
 	res := p._db.Connection.PgConn().ExecPrepared(context.Background(), "insertall"+tableName, args, p.formatBuf, nil).Read()
 	p.writeLatencyStats.finish(start)
 	if res.Err != nil {

@@ -25,8 +25,8 @@ func NewBenchmark(dbName string, opts *LoadingOptions, dataSourceConfig *source.
 	var latencyRecorder *writeLatencyRecorder
 	if opts.WriteLatency {
 		latencyRecorder = newWriteLatencyRecorder(opts.Workers)
-		opts.writeLatencyRecorder = latencyRecorder
 	}
+	opts.writeLatencyRecorder = latencyRecorder
 
 	return &benchmark{
 		opts:                 opts,
