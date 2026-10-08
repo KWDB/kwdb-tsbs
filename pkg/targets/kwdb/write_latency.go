@@ -2,6 +2,7 @@ package kwdb
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/HdrHistogram/hdrhistogram-go"
@@ -11,13 +12,14 @@ import (
 const maxWriteLatency = time.Hour
 
 type writeLatencyStats struct {
-	// Each instance is owned by exactly one loader worker, so recording does
-	// not require synchronization.
-	histogram *hdrhistogram.Histogram
+	recorder *writeLatencyRecorder
 }
 
 type writeLatencyRecorder struct {
-	workers []*writeLatencyStats
+	mu          sync.Mutex
+	histogram   *hdrhistogram.Histogram
+	workerCount int
+	stats       writeLatencyStats
 }
 
 func newWriteLatencyHistogram() *hdrhistogram.Histogram {
@@ -25,24 +27,19 @@ func newWriteLatencyHistogram() *hdrhistogram.Histogram {
 }
 
 func newWriteLatencyRecorder(workerCount int) *writeLatencyRecorder {
-	return &writeLatencyRecorder{
-		workers: make([]*writeLatencyStats, workerCount),
+	recorder := &writeLatencyRecorder{
+		histogram:   newWriteLatencyHistogram(),
+		workerCount: workerCount,
 	}
+	recorder.stats.recorder = recorder
+	return recorder
 }
 
 func (r *writeLatencyRecorder) worker(workerNum int) *writeLatencyStats {
-	if r == nil || workerNum < 0 || workerNum >= len(r.workers) {
+	if r == nil || workerNum < 0 || workerNum >= r.workerCount {
 		return nil
 	}
-
-	// Each worker initializes its own histogram after RunBenchmark has started
-	// timing. Keeping the large histogram allocation out of benchmark setup
-	// prevents it from changing the Go GC heap goal before the timed load.
-	stats := &writeLatencyStats{
-		histogram: newWriteLatencyHistogram(),
-	}
-	r.workers[workerNum] = stats
-	return stats
+	return &r.stats
 }
 
 func (s *writeLatencyStats) record(elapsed time.Duration) {
@@ -53,35 +50,18 @@ func (s *writeLatencyStats) record(elapsed time.Duration) {
 		value = maxWriteLatency.Microseconds()
 	}
 
-	_ = s.histogram.RecordValue(value)
-}
-
-func (s *writeLatencyStats) start() time.Time {
-	if s == nil {
-		return time.Time{}
-	}
-	return time.Now()
+	s.recorder.mu.Lock()
+	_ = s.recorder.histogram.RecordValue(value)
+	s.recorder.mu.Unlock()
 }
 
 func (s *writeLatencyStats) finish(start time.Time) {
-	if s == nil {
-		return
-	}
 	s.record(time.Since(start))
 }
 
 func (r *writeLatencyRecorder) print() {
-	histogram := newWriteLatencyHistogram()
-	for _, worker := range r.workers {
-		if worker == nil {
-			continue
-		}
-		// All workers have stopped before reporting, and every histogram uses
-		// the same range, so merging is safe and cannot drop values.
-		histogram.Merge(worker.histogram)
-	}
-
-	count := histogram.TotalCount()
+	// Reporting happens after all loader workers have stopped.
+	count := r.histogram.TotalCount()
 	if count == 0 {
 		fmt.Println("\nWrite request latency: no data write requests recorded")
 		return
@@ -92,12 +72,12 @@ func (r *writeLatencyRecorder) print() {
 	}
 	fmt.Println("\nWrite request latency (all workers):")
 	fmt.Printf("mean: %.2fms, p50: %.2fms, p90: %.2fms, p95: %.2fms, p99: %.2fms, max: %.2fms, count: %d\n",
-		toMillis(histogram.Mean()),
-		toMillis(float64(histogram.ValueAtQuantile(50))),
-		toMillis(float64(histogram.ValueAtQuantile(90))),
-		toMillis(float64(histogram.ValueAtQuantile(95))),
-		toMillis(float64(histogram.ValueAtQuantile(99))),
-		toMillis(float64(histogram.Max())),
+		toMillis(r.histogram.Mean()),
+		toMillis(float64(r.histogram.ValueAtQuantile(50))),
+		toMillis(float64(r.histogram.ValueAtQuantile(90))),
+		toMillis(float64(r.histogram.ValueAtQuantile(95))),
+		toMillis(float64(r.histogram.ValueAtQuantile(99))),
+		toMillis(float64(r.histogram.Max())),
 		count,
 	)
 }
