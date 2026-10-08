@@ -2,57 +2,49 @@ package kwdb
 
 import (
 	"fmt"
-	"sync"
 	"time"
 
-	"github.com/HdrHistogram/hdrhistogram-go"
 	"github.com/timescale/tsbs/pkg/targets"
 )
 
-const maxWriteLatency = time.Hour
-
 type writeLatencyStats struct {
-	recorder *writeLatencyRecorder
+	total time.Duration
+	max   time.Duration
+	count uint64
+
+	// Keep counters written by different workers on separate cache lines. The
+	// extra cache line also makes this safe when the slice base is not aligned
+	// to a cache-line boundary.
+	_ [104]byte
 }
 
 type writeLatencyRecorder struct {
-	mu          sync.Mutex
-	histogram   *hdrhistogram.Histogram
-	workerCount int
-	stats       writeLatencyStats
-}
-
-func newWriteLatencyHistogram() *hdrhistogram.Histogram {
-	return hdrhistogram.New(1, maxWriteLatency.Microseconds(), 3)
+	workers []writeLatencyStats
 }
 
 func newWriteLatencyRecorder(workerCount int) *writeLatencyRecorder {
-	recorder := &writeLatencyRecorder{
-		histogram:   newWriteLatencyHistogram(),
-		workerCount: workerCount,
+	if workerCount < 0 {
+		workerCount = 0
 	}
-	recorder.stats.recorder = recorder
-	return recorder
+	return &writeLatencyRecorder{workers: make([]writeLatencyStats, workerCount)}
 }
 
 func (r *writeLatencyRecorder) worker(workerNum int) *writeLatencyStats {
-	if r == nil || workerNum < 0 || workerNum >= r.workerCount {
+	if r == nil || workerNum < 0 || workerNum >= len(r.workers) {
 		return nil
 	}
-	return &r.stats
+	return &r.workers[workerNum]
 }
 
 func (s *writeLatencyStats) record(elapsed time.Duration) {
-	value := elapsed.Microseconds()
-	if value < 1 {
-		value = 1
-	} else if value > maxWriteLatency.Microseconds() {
-		value = maxWriteLatency.Microseconds()
+	if elapsed < 0 {
+		elapsed = 0
 	}
-
-	s.recorder.mu.Lock()
-	_ = s.recorder.histogram.RecordValue(value)
-	s.recorder.mu.Unlock()
+	s.total += elapsed
+	s.count++
+	if elapsed > s.max {
+		s.max = elapsed
+	}
 }
 
 func (s *writeLatencyStats) finish(start time.Time) {
@@ -60,24 +52,26 @@ func (s *writeLatencyStats) finish(start time.Time) {
 }
 
 func (r *writeLatencyRecorder) print() {
-	// Reporting happens after all loader workers have stopped.
-	count := r.histogram.TotalCount()
+	var total, max time.Duration
+	var count uint64
+	for i := range r.workers {
+		worker := &r.workers[i]
+		total += worker.total
+		count += worker.count
+		if worker.max > max {
+			max = worker.max
+		}
+	}
+
 	if count == 0 {
 		fmt.Println("\nWrite request latency: no data write requests recorded")
 		return
 	}
 
-	toMillis := func(value float64) float64 {
-		return value / float64(time.Millisecond/time.Microsecond)
-	}
 	fmt.Println("\nWrite request latency (all workers):")
-	fmt.Printf("mean: %.2fms, p50: %.2fms, p90: %.2fms, p95: %.2fms, p99: %.2fms, max: %.2fms, count: %d\n",
-		toMillis(r.histogram.Mean()),
-		toMillis(float64(r.histogram.ValueAtQuantile(50))),
-		toMillis(float64(r.histogram.ValueAtQuantile(90))),
-		toMillis(float64(r.histogram.ValueAtQuantile(95))),
-		toMillis(float64(r.histogram.ValueAtQuantile(99))),
-		toMillis(float64(r.histogram.Max())),
+	fmt.Printf("mean: %.2fms, max: %.2fms, count: %d\n",
+		float64(total)/float64(count)/float64(time.Millisecond),
+		float64(max)/float64(time.Millisecond),
 		count,
 	)
 }
