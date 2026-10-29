@@ -127,11 +127,11 @@ func (r *writeLatencyRecorder) writeSummary(w io.Writer) {
 	}
 
 	fmt.Fprintln(w, "\nWrite latency per row (all workers):")
-	fmt.Fprintf(w, "mean: %.3fus/row, p50: %.3fus/row, p99: %.3fus/row, p99.9: %.3fus/row\n",
-		total/float64(count)/float64(time.Microsecond),
-		float64(r.valueAtQuantile(500, count))/float64(time.Microsecond),
-		float64(r.valueAtQuantile(990, count))/float64(time.Microsecond),
-		float64(r.valueAtQuantile(999, count))/float64(time.Microsecond),
+	fmt.Fprintf(w, "mean: %.3fms/row, p50: %.3fms/row, p99: %.3fms/row, p99.9: %.3fms/row\n",
+		total/float64(count)/float64(time.Millisecond),
+		float64(r.valueAtQuantile(500, count))/float64(time.Millisecond),
+		float64(r.valueAtQuantile(990, count))/float64(time.Millisecond),
+		float64(r.valueAtQuantile(999, count))/float64(time.Millisecond),
 	)
 }
 

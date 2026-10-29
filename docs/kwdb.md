@@ -112,7 +112,7 @@ The size of each batch. If --insert-type=prepare, replace --batch-size with --pr
 Collect client-side per-row write latency for insert, prepare, and prepareiot. Set to `false` to disable.
 Time each data write until its complete successful response, then divide its duration by the actual number of data rows in that request to obtain one sample.
 Prepared writes use the actual executed row count (controlled by `preparesize`); split inserts, separate IoT tables, and partial batches use their own actual row counts.
-After all workers finish, report only mean, P50, P99, and P99.9 in `us/row` (microseconds per row). With a fixed batch size, this equals dividing the batch latency statistics by that size. With variable sizes, normalize each request before calculating the statistics; each successful request contributes one sample.
+After all workers finish, report only mean, P50, P99, and P99.9 in `ms/row` (milliseconds per row), with three decimal places. With a fixed batch size, this equals dividing the batch latency statistics by that size. With variable sizes, normalize each request before calculating the statistics; each successful request contributes one sample.
 Percentiles use worker-local, lock-free fixed buckets with nanosecond resolution and about 1.6% maximum relative bucket error. Failed requests, table creation, and tag initialization are excluded. The existing import throughput calculation is unchanged.
 
 #### `-workers` (type: `int`)
