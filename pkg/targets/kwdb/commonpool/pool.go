@@ -111,3 +111,24 @@ func GetConnection(user, password, host, certdir string, port int) (*Conn, error
 		pool:       newPool,
 	}, nil
 }
+
+// GetConnectionForWorker connects to endpoints[workerNum % len(endpoints)].
+// Use this when --hosts lists multiple SQL endpoints so load/query workers
+// fan out across nodes.
+func GetConnectionForWorker(user, password, certdir string, endpoints []Endpoint, workerNum int) (*Conn, error) {
+	ep, err := PickEndpoint(endpoints, workerNum)
+	if err != nil {
+		return nil, err
+	}
+	return GetConnection(user, password, ep.Host, certdir, ep.Port)
+}
+
+// GetConnectionFromOpts resolves hostsCSV (or host+port) then connects using
+// workerNum for endpoint selection.
+func GetConnectionFromOpts(user, password, hostsCSV, host, certdir string, port, workerNum int) (*Conn, error) {
+	endpoints, err := ResolveEndpoints(hostsCSV, host, port)
+	if err != nil {
+		return nil, err
+	}
+	return GetConnectionForWorker(user, password, certdir, endpoints, workerNum)
+}

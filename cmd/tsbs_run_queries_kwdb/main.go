@@ -18,6 +18,7 @@ var (
 	user      string
 	pass      string
 	host      string
+	hosts     string
 	certdir   string
 	querytype string
 	port      int
@@ -32,9 +33,10 @@ func init() {
 
 	pflag.String("user", "root", "User to connect to kwdb")
 	pflag.String("pass", "", "Password for the user connecting to kwdb")
-	pflag.String("host", "", "kwdb host")
+	pflag.String("host", "", "kwdb host (single endpoint; ignored for routing when --hosts is set)")
+	pflag.String("hosts", "", "Comma-separated kwdb endpoints host:port (workers round-robin by index)")
 	pflag.String("certdir", "", "dir of cert files")
-	pflag.Int("port", 26257, "kwdb Port")
+	pflag.Int("port", 26257, "kwdb Port (default for bare hosts in --hosts, or single --host)")
 	pflag.Parse()
 	err := utils.SetupConfigFile()
 
@@ -47,6 +49,7 @@ func init() {
 	user = viper.GetString("user")
 	pass = viper.GetString("pass")
 	host = viper.GetString("host")
+	hosts = viper.GetString("hosts")
 	certdir = viper.GetString("certdir")
 	querytype = viper.GetString("query-type")
 	prepare = viper.GetBool("prepare")
@@ -73,7 +76,7 @@ type processor struct {
 }
 
 func (p *processor) Init(workerNum int) {
-	db, err := commonpool.GetConnection(user, pass, host, certdir, port)
+	db, err := commonpool.GetConnectionFromOpts(user, pass, hosts, host, certdir, port, workerNum)
 	if err != nil {
 		panic(err)
 	}

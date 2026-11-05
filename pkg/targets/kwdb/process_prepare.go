@@ -104,7 +104,7 @@ func (p *prepareProcessor) Init(workerNum int, doLoad, _ bool) {
 	p.workerIndex = workerNum
 
 	var err error
-	p._db, err = commonpool.GetConnection(p.opts.User, p.opts.Pass, p.opts.Host, p.opts.CertDir, p.opts.Port)
+	p._db, err = commonpool.GetConnectionFromOpts(p.opts.User, p.opts.Pass, p.opts.Hosts, p.opts.Host, p.opts.CertDir, p.opts.Port, workerNum)
 	if err != nil {
 		panic(err)
 	}
@@ -154,8 +154,7 @@ func (p *prepareProcessor) ProcessBatch(b targets.Batch, doLoad bool) (metricCou
 	for _, args := range batches.m {
 		rowCnt += uint64(len(args))
 		for _, s := range args {
-			s = s[1 : len(s)-1]
-			p.parseCPURowIntoBuffer(s, tableBuffer)
+			p.parseCPURowIntoBuffer(stripCPURowEnvelope(s), tableBuffer)
 
 			// check buffer is full
 			if tableBuffer.Length() == tableBuffer.Capacity() {
@@ -175,6 +174,41 @@ func (p *prepareProcessor) ProcessBatch(b targets.Batch, doLoad bool) (metricCou
 
 	// batches.Reset()
 	return metricCnt + uint64(deviceNums)*20, rowCnt + uint64(deviceNums)
+}
+
+// stripCPURowEnvelope removes a matching "(...)" wrapper. Truncated rows that
+// keep the leading '(' but lose the trailing ')' must not use s[1:len-1], or
+// the hostname's closing quote is eaten (e.g. "'host_244'" → "'host_244").
+func stripCPURowEnvelope(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) >= 2 && s[0] == '(' && s[len(s)-1] == ')' {
+		return s[1 : len(s)-1]
+	}
+	if len(s) >= 1 && s[0] == '(' {
+		return s[1:]
+	}
+	return s
+}
+
+// extractHostnameField mirrors the legacy strings.Split(v, "'")[1] behavior:
+// prefer quoted content, and tolerate a missing closing quote on truncated rows.
+func extractHostnameField(v string) string {
+	trimmed := strings.TrimSpace(v)
+	q1 := strings.IndexByte(trimmed, '\'')
+	if q1 < 0 {
+		if trimmed == "" {
+			panic(fmt.Sprintf("kwdb invalid hostname field: %q", v))
+		}
+		return trimmed
+	}
+	rest := trimmed[q1+1:]
+	if q2 := strings.IndexByte(rest, '\''); q2 >= 0 {
+		return rest[:q2]
+	}
+	if rest == "" {
+		panic(fmt.Sprintf("kwdb invalid hostname field: %q", trimmed))
+	}
+	return rest
 }
 
 func (p *prepareProcessor) parseCPURowIntoBuffer(s string, tableBuffer *fixedArgList) {
@@ -199,24 +233,7 @@ func (p *prepareProcessor) parseCPURowIntoBuffer(s string, tableBuffer *fixedArg
 				tableBuffer.Emplace(uint64(num))
 			}
 		} else {
-			left := 0
-			right := len(v) - 1
-			for left <= right && (v[left] == ' ' || v[left] == '\t' || v[left] == '\n' || v[left] == '\r') {
-				left++
-			}
-			for right >= left && (v[right] == ' ' || v[right] == '\t' || v[right] == '\n' || v[right] == '\r') {
-				right--
-			}
-			trimmed := v[left : right+1]
-			q1 := strings.IndexByte(trimmed, '\'')
-			if q1 < 0 {
-				panic(fmt.Sprintf("kwdb invalid hostname field: %q", trimmed))
-			}
-			q2 := strings.IndexByte(trimmed[q1+1:], '\'')
-			if q2 < 0 {
-				panic(fmt.Sprintf("kwdb invalid hostname field: %q", trimmed))
-			}
-			tableBuffer.Append([]byte(trimmed[q1+1 : q1+1+q2]))
+			tableBuffer.Append([]byte(extractHostnameField(v)))
 		}
 
 		fieldIdx++

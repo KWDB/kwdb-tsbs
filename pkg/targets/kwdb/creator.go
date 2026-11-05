@@ -23,7 +23,8 @@ var IOTPRE = []string{"readings", "diagnostics"}
 var DEVOPSPRE = []string{"cpu", "diskio", "disk", "kernel", "mem", "net", "nginx", "postgresl", "redis"}
 
 func (d *dbCreator) Init() {
-	db, err := commonpool.GetConnection(d.opts.User, d.opts.Pass, d.opts.Host, d.opts.CertDir, d.opts.Port)
+	// DDL uses worker 0 → first endpoint when --hosts is set.
+	db, err := commonpool.GetConnectionFromOpts(d.opts.User, d.opts.Pass, d.opts.Hosts, d.opts.Host, d.opts.CertDir, d.opts.Port, 0)
 	if err != nil {
 		panic(fmt.Sprintf("kwdb can not get connection %s", err.Error()))
 	}

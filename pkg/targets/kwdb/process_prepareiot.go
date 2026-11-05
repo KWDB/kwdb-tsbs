@@ -80,7 +80,7 @@ func (p *prepareProcessoriot) Init(workerNum int, doLoad, _ bool) {
 	p.workerIndex = workerNum
 
 	var err error
-	p._db, err = commonpool.GetConnection(p.opts.User, p.opts.Pass, p.opts.Host, p.opts.CertDir, p.opts.Port)
+	p._db, err = commonpool.GetConnectionFromOpts(p.opts.User, p.opts.Pass, p.opts.Hosts, p.opts.Host, p.opts.CertDir, p.opts.Port, workerNum)
 	if err != nil {
 		panic(err)
 	}

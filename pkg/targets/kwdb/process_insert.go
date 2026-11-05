@@ -50,7 +50,7 @@ func (p *processorInsert) Init(proNum int, doLoad, _ bool) {
 	}
 	p.buf.Grow(Size1M)
 	var err error
-	p._db, err = commonpool.GetConnection(p.opts.User, p.opts.Pass, p.opts.Host, p.opts.CertDir, p.opts.Port)
+	p._db, err = commonpool.GetConnectionFromOpts(p.opts.User, p.opts.Pass, p.opts.Hosts, p.opts.Host, p.opts.CertDir, p.opts.Port, proNum)
 
 	if err != nil {
 		panic(err)
