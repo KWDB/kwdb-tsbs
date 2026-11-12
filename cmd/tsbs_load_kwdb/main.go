@@ -37,6 +37,7 @@ func initProgramOptions() (*kwdb.LoadingOptions, load.BenchmarkRunner, *load.Ben
 	opts.User = viper.GetString("user")
 	opts.Pass = viper.GetString("pass")
 	opts.Host = viper.GetString("host")
+	opts.Hosts = viper.GetString("hosts")
 	opts.Port = viper.GetInt("port")
 	opts.DBName = viper.GetString("db-name")
 	opts.Type = viper.GetString("insert-type")
@@ -72,7 +73,7 @@ func main() {
 	}
 	loader.RunBenchmark(benchmark)
 
-	_db, err := commonpool.GetConnection(opts.User, opts.Pass, opts.Host, opts.CertDir, opts.Port)
+	_db, err := commonpool.GetConnectionFromOpts(opts.User, opts.Pass, opts.Hosts, opts.Host, opts.CertDir, opts.Port, 0)
 
 	if err != nil {
 		panic(err)
