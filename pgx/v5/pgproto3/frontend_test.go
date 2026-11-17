@@ -1,6 +1,7 @@
 package pgproto3_test
 
 import (
+	"bytes"
 	"io"
 	"testing"
 
@@ -8,6 +9,25 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFrontendDiscardKwDataRowBatch(t *testing.T) {
+	frontend := pgproto3.NewFrontend(bytes.NewReader([]byte{
+		'M', 0, 0, 0, 7, 1, 2, 3,
+		'M', 0, 0, 0, 7, 4, 5, 6,
+	}), nil)
+
+	frontend.SetDiscardKwDataRowBatch(true)
+	msg, err := frontend.Receive()
+	require.NoError(t, err)
+	require.IsType(t, &pgproto3.KwDataRowBatchRaw{}, msg)
+	assert.Empty(t, msg.(*pgproto3.KwDataRowBatchRaw).Body)
+
+	frontend.SetDiscardKwDataRowBatch(false)
+	msg, err = frontend.Receive()
+	require.NoError(t, err)
+	require.IsType(t, &pgproto3.KwDataRowBatchRaw{}, msg)
+	assert.Equal(t, []byte{4, 5, 6}, msg.(*pgproto3.KwDataRowBatchRaw).Body)
+}
 
 type interruptReader struct {
 	chunks [][]byte
