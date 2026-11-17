@@ -286,6 +286,5 @@ func tenMinutePeriods(minutesPerHour float64, duration time.Duration) int {
 }
 
 func parseTime(time time.Time) string {
-	timeStr := strings.Split(time.String(), " ")
-	return fmt.Sprintf("%s %s", timeStr[0], timeStr[1])
+	return time.Format("2006-01-02 15:04:05.000")
 }
