@@ -53,11 +53,12 @@ type Frontend struct {
 	portalSuspended                 PortalSuspended
 	aEParameter                     AEParameter
 
-	bodyLen    int
-	msgType    byte
-	partialMsg bool
-	authType   uint32
-	kwColOIDs  []uint32
+	bodyLen               int
+	msgType               byte
+	partialMsg            bool
+	authType              uint32
+	kwColOIDs             []uint32
+	discardKwDataRowBatch bool
 }
 
 // NewFrontend creates a new Frontend.
@@ -65,6 +66,11 @@ func NewFrontend(r io.Reader, w io.Writer) *Frontend {
 	cr := newChunkReader(r, 0)
 	aEParameter := NewAEParameter()
 	return &Frontend{cr: cr, w: w, aEParameter: *aEParameter}
+}
+
+// SetDiscardKwDataRowBatch skips copying KWDB batch bodies when results are discarded.
+func (f *Frontend) SetDiscardKwDataRowBatch(discard bool) {
+	f.discardKwDataRowBatch = discard
 }
 
 // Send sends a message to the backend (i.e. the server). The message is not guaranteed to be written until Flush is
@@ -311,14 +317,20 @@ func (f *Frontend) Receive() (BackendMessage, error) {
 	case 'Z':
 		msg = &f.readyForQuery
 	case 'M':
-		msg = &KwDataRowBatchRaw{
-			ColOIDs: append(make([]uint32, 0, len(f.kwColOIDs)), f.kwColOIDs...),
+		if f.discardKwDataRowBatch {
+			msg = &KwDataRowBatchRaw{}
+		} else {
+			msg = &KwDataRowBatchRaw{
+				ColOIDs: append(make([]uint32, 0, len(f.kwColOIDs)), f.kwColOIDs...),
+			}
 		}
 
 	default:
 		return nil, fmt.Errorf("unknown message type: %c", f.msgType)
 	}
-	err = msg.Decode(msgBody)
+	if f.msgType != 'M' || !f.discardKwDataRowBatch {
+		err = msg.Decode(msgBody)
+	}
 	if err != nil {
 		return nil, err
 	}

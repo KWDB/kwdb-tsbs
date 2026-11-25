@@ -15,15 +15,16 @@ import (
 )
 
 var (
-	user      string
-	pass      string
-	host      string
-	certdir   string
-	querytype string
-	port      int
-	runner    *query.BenchmarkRunner
-	prepare   bool
-	compress  string
+	user             string
+	pass             string
+	host             string
+	certdir          string
+	querytype        string
+	port             int
+	runner           *query.BenchmarkRunner
+	prepare          bool
+	compress         string
+	skipResultDecode bool
 )
 
 func init() {
@@ -35,6 +36,7 @@ func init() {
 	pflag.String("host", "", "kwdb host")
 	pflag.String("certdir", "", "dir of cert files")
 	pflag.Int("port", 26257, "kwdb Port")
+	pflag.Bool("skip-result-decode", false, "Drain KWDB query results without decoding or storing rows")
 	pflag.Parse()
 	err := utils.SetupConfigFile()
 
@@ -51,6 +53,7 @@ func init() {
 	querytype = viper.GetString("query-type")
 	prepare = viper.GetBool("prepare")
 	compress = viper.GetString("compress")
+	skipResultDecode = viper.GetBool("skip-result-decode")
 	port = viper.GetInt("port")
 	runner = query.NewBenchmarkRunner(config)
 }
@@ -78,6 +81,9 @@ func (p *processor) Init(workerNum int) {
 		panic(err)
 	}
 	p.db = db
+	if skipResultDecode {
+		p.db.Connection.PgConn().Frontend().SetDiscardKwDataRowBatch(true)
+	}
 	p.opts = &queryExecutorOptions{
 		debug:         runner.DebugLevel() > 0,
 		printResponse: runner.DoPrintResponses(),
@@ -126,7 +132,11 @@ func (p *processor) ProcessQuery(q query.Query, prepare bool) ([]*query.Stat, er
 				return nil, err
 			}
 
-			for rows.Next() {
+			if skipResultDecode {
+				rows.Close()
+			} else {
+				for rows.Next() {
+				}
 			}
 			if err := rows.Err(); err != nil {
 				log.Println("Error reading query result: '", querys[i], "'")
@@ -137,9 +147,15 @@ func (p *processor) ProcessQuery(q query.Query, prepare bool) ([]*query.Stat, er
 
 			tableBuffer := p.buffer[tq.Querytype]
 			p.RunSelect(tq.Querytype, strings.Split(qry, ","), tableBuffer)
-			res := p.db.Connection.PgConn().ExecPrepared(ctx, tq.Querytype, tableBuffer.args, p.formatBuf, []int16{}).Read()
-			if res.Err != nil {
-				panic(res.Err)
+			resultReader := p.db.Connection.PgConn().ExecPrepared(ctx, tq.Querytype, tableBuffer.args, p.formatBuf, []int16{})
+			var err error
+			if skipResultDecode {
+				_, err = resultReader.Close()
+			} else {
+				err = resultReader.Read().Err
+			}
+			if err != nil {
+				panic(err)
 			}
 			tableBuffer.Reset()
 		}
