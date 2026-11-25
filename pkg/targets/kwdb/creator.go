@@ -67,6 +67,13 @@ func (d *dbCreator) CreateDB(dbName string) error {
 			// 暂停一分钟
 			time.Sleep(1 * time.Minute)
 		}
+
+		sqlwma := fmt.Sprintf("CREATE WMA w1h (sum(*), count(*), avg(*), min(*), max(*)) time_bucket(k_timestamp, '3600s') ON %s.public.cpu;", dbName)
+		_, err = d.db.Connection.Exec(ctx, sqlwma)
+		if err != nil {
+			panic(fmt.Sprintf("kwdb create WMA failed,err :%s", err))
+		}
+
 	} else if d.opts.Case == "iot" {
 		fmt.Println("create iot tables")
 		readings := fmt.Sprintf("create table %s.readings (k_timestamp timestamp NOT NULL,latitude FLOAT8 NOT NULL,longitude FLOAT8 NOT NULL,elevation FLOAT8 NOT NULL,velocity FLOAT8 NOT NULL,heading FLOAT8 NOT NULL,grade FLOAT8 NOT NULL,fuel_consumption FLOAT8 NOT NULL) tags (name VARCHAR(30) NOT NULL,fleet VARCHAR(30),driver VARCHAR(30),model VARCHAR(30),device_version VARCHAR(30),load_capacity FLOAT8,fuel_capacity FLOAT8,nominal_fuel_consumption FLOAT8) primary tags(name)", dbName)
