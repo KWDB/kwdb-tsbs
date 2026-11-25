@@ -6,6 +6,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/timescale/tsbs/pkg/targets"
 	"github.com/timescale/tsbs/pkg/targets/kwdb/commonpool"
@@ -31,7 +32,8 @@ type prepareProcessoriot struct {
 	prepareStmtReadings    strings.Builder
 	prepareStmtDiagnostics strings.Builder
 
-	workerIndex int
+	workerIndex       int
+	writeLatencyStats *writeLatencyStats
 
 	// prepare buff
 	buffer               map[string]*fixedArgList
@@ -62,6 +64,9 @@ func newProcessorPrepareiot(opts *LoadingOptions, dbName string) *prepareProcess
 func (p *prepareProcessoriot) Init(workerNum int, doLoad, _ bool) {
 	if !doLoad {
 		return
+	}
+	if p.opts.WriteLatency {
+		p.writeLatencyStats = p.opts.writeLatencyRecorder.worker(workerNum)
 	}
 	p.prepareStmtReadings.Grow(Size1M)
 	for i := 0; i < p.opts.Preparesize; i++ {
@@ -539,14 +544,34 @@ func (p *prepareProcessoriot) createPrepareSql(deviecName string) {
 
 func (p *prepareProcessoriot) execPrepareStmt(tableName string, args [][]byte) {
 	if tableName == "readings" {
+		if p.writeLatencyStats == nil {
+			res := p._db.Connection.PgConn().ExecPrepared(context.Background(), "insertallreadings", args, p.formatBufReadings, []int16{}).Read()
+			if res.Err != nil {
+				panic(res.Err)
+			}
+			return
+		}
+		start := time.Now()
 		res := p._db.Connection.PgConn().ExecPrepared(context.Background(), "insertallreadings", args, p.formatBufReadings, []int16{}).Read()
+		elapsed := time.Since(start)
 		if res.Err != nil {
 			panic(res.Err)
 		}
+		p.writeLatencyStats.record(elapsed, len(args)/9)
 	} else {
+		if p.writeLatencyStats == nil {
+			res := p._db.Connection.PgConn().ExecPrepared(context.Background(), "insertalldiagnostics", args, p.formatBufDiagnostics, []int16{}).Read()
+			if res.Err != nil {
+				panic(res.Err)
+			}
+			return
+		}
+		start := time.Now()
 		res := p._db.Connection.PgConn().ExecPrepared(context.Background(), "insertalldiagnostics", args, p.formatBufDiagnostics, []int16{}).Read()
+		elapsed := time.Since(start)
 		if res.Err != nil {
 			panic(res.Err)
 		}
+		p.writeLatencyStats.record(elapsed, len(args)/5)
 	}
 }
