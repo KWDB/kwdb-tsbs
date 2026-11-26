@@ -6,7 +6,7 @@ KWDB 是一款面向 AIoT 物联网场景的分布式多模数据库产品，支
 本文档是对主 README_zh 的补充，详细说明以下内容：
 
 * 数据产生工具 (`tsbs_generate_data`) 相关使用。
-* 数据生成工具 (`tsbs_load_kwdb`) 相关使用。
+* 数据导入工具 (`tsbs_load_kwdb`) 相关使用。
 * 查询生成工具 (`tsbs_generate_queries`) 相关使用。
 * 查询执行工具 (`tsbs_run_queries_kwdb`) 相关使用。
 
@@ -93,8 +93,8 @@ KWDB 服务器端口。
 |----------|-------------|
 | cpu-only | insert      |
 | cpu-only | prepare     |
-| IoT      | insert      |
-| IoT      | prepareiot  |
+| ioT      | insert      |
+| ioT      | prepareiot  |
 
 
 #### `-db-name` （类型：`string`）
