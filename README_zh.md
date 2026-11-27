@@ -27,7 +27,7 @@ kwdb-tsbs/
 └── bin/
     ├── tsbs_generate_data      # 数据生成工具
     ├── tsbs_load_kwdb          # 数据导入工具
-    ├── tsbs_generate_queries   # 查询执行工具
+    ├── tsbs_generate_queries   # 查询生成工具
     └── tsbs_run_queries_kwdb   # 查询执行工具    
 ```
 
